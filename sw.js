@@ -1,10 +1,9 @@
-const CACHE='nutritrace-v11-static-local-first';
+const CACHE='nutritrace-v12-local-first-ai';
 const CORE=['./','./index.html','./app.js','./style.css','./manifest.webmanifest','./icon-192.png','./icon-512.png'];
 const VENDOR=[
   'https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js',
-  'https://cdn.sheetjs.com/xlsx-0.18.5/package/dist/xlsx.full.min.js',
-  'https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js'
+  'https://cdn.sheetjs.com/xlsx-0.18.5/package/dist/xlsx.full.min.js'
 ];
 self.addEventListener('install', event => {
   event.waitUntil((async()=>{

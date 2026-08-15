@@ -1,16 +1,11 @@
 const { useEffect, useMemo, useState } = React;
-const { unzipSync, strFromU8 } = fflate;
 const SOURCE_META = {
-    USDA_FOUNDATION: { name: 'USDA FoodData Central · Foundation Foods', version: '04/2026', mode: 'local', official: true, scientific: true },
-    USDA_SR: { name: 'USDA FoodData Central · SR Legacy', version: '04/2018', mode: 'local', official: true, scientific: true },
     CIQUAL: { name: 'ANSES-CIQUAL', version: '2025', mode: 'local', official: true, scientific: true },
     FRIDA: { name: 'FRIDA / DTU Food Institute', version: '5.5 (2025)', mode: 'local', official: true, scientific: true },
-    COFID: { name: 'UK CoFID', version: '2021', mode: 'local', official: true, scientific: true },
-    USDA_BRANDED: { name: 'USDA FoodData Central · Branded', version: 'online', mode: 'online', official: true, scientific: false },
+    COFID: { name: 'UK CoFID', version: '2021', mode: 'local', official: true, scientific: true }
 };
-const SCIENTIFIC_SOURCES = ['USDA_FOUNDATION', 'USDA_SR', 'CIQUAL', 'FRIDA', 'COFID'];
 const clean = s => String(s ?? '').trim();
-const norm = s => clean(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/µ/g, 'u').replace(/[^a-z0-9]+/g, ' ').trim();
+const norm = s => clean(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[µμ]/g, 'u').replace(/[^a-z0-9]+/g, ' ').trim();
 function num(v) {
     if (v === null || v === undefined || v === '')
         return null;
@@ -59,12 +54,12 @@ function phraseAlternatives(q) {
 }
 const FIELD_ALIASES = {
     kcal: ['energy kcal', 'energie kcal', 'energia kcal', 'energy kcal 100g', 'energy kcal per 100g', 'kcal'],
-    protein: ['protein', 'proteines', 'proteine', 'protein g', 'protein g 100g'],
-    carbs: ['carbohydrate', 'carbohydrates', 'glucides', 'carboidrati', 'carbohydrate g'],
-    sugar: ['sugars', 'sum sugars', 'sucres', 'zuccheri', 'total sugars'],
-    fat: ['fat', 'lipids', 'lipides', 'grassi', 'total fat'],
+    protein: ['protein', 'proteins', 'proteines', 'proteine', 'protein g', 'protein g 100g'],
+    carbs: ['carbohydrate', 'carbohydrates', 'available carbohydrates', 'available_carbohydrates', 'glucides', 'carboidrati', 'carboidrati disponibili', 'carbohydrate g'],
+    sugar: ['sugars', 'sum sugars', 'soluble sugars', 'soluble_sugars', 'sucres', 'zuccheri', 'zuccheri solubili', 'total sugars'],
+    fat: ['fat', 'lipid', 'lipids', 'lipides', 'grassi', 'total fat'],
     saturatedFat: ['saturates', 'saturated fatty acids', 'saturated fat', 'acides gras satures', 'grassi saturi'],
-    fiber: ['fibre', 'fiber', 'dietary fibre', 'fibres alimentaires', 'fibre alimentaire'],
+    fiber: ['fibre', 'fiber', 'total fiber', 'total_fiber', 'fibra totale', 'dietary fibre', 'fibres alimentaires', 'fibre alimentaire'],
     salt: ['salt', 'sel chlorure de sodium', 'sale'], sodium: ['sodium', 'sodio'],
 };
 const NUTRIENT_ALIASES = {
@@ -83,6 +78,11 @@ const NUTRIENT_ALIASES = {
     'Leucina': ['leucine'], 'Isoleucina': ['isoleucine'], 'Valina': ['valine'], 'Lisina': ['lysine'], 'Metionina': ['methionine'],
     'Treonina': ['threonine'], 'Triptofano': ['tryptophan'], 'Istidina': ['histidine'], 'Fenilalanina': ['phenylalanine'],
     'Fruttosio': ['fructose'], 'Glucosio': ['glucose'], 'Galattosio': ['galactose'], 'Lattosio': ['lactose'], 'Saccarosio': ['sucrose'],
+    'Sodio': ['sodium', 'sodio'], 'Cloruro': ['chloride', 'chlorine', 'cloro', 'cloruro'], 'Cromo': ['chromium', 'cromo'],
+    'Molibdeno': ['molybdenum', 'molibdeno'], 'Nickel': ['nickel'], 'Fluoro': ['fluoride', 'fluorine', 'fluoro'], 'Zolfo': ['sulfur', 'sulphur', 'zolfo'],
+    'Vitamina A': ['vitamin a', 'vitamina a', 'retinol equivalent', 'retinolo equivalente'],
+    'Acido pantotenico B5': ['pantothenic acid', 'acido pantotenico'], 'Biotina B7': ['biotin', 'biotina'],
+    'Colina': ['choline', 'colina'], 'Acido arachidonico (AA)': ['arachidonic acid', 'acido arachidonico', '20 4 n 6'],
 };
 function matchesHeader(header, aliases) { const h = norm(header); return aliases.some(a => h === norm(a) || h.includes(norm(a))); }
 function unitFromHeader(h, fallback = 'mg') { const n = norm(h); if (/\b(kcal)\b/.test(n))
@@ -165,7 +165,7 @@ function normalizeLongRows(source, rows) {
             const v = num(r[valueKey]);
             if (v === null)
                 continue;
-            const unit = clean(unitKey ? r[unitKey] : '') || unitFromHeader(p);
+            const rawUnit=clean(unitKey ? r[unitKey] : ''); const unit = rawUnit ? (rawUnit.replace(/μ/g,'µ').replace(/^ug$/i,'µg').replace(/^mcg$/i,'µg')) : unitFromHeader(p);
             for (const [field, aliases] of Object.entries(FIELD_ALIASES))
                 if (matchesHeader(p, aliases)) {
                     if (field === 'sodium') {
@@ -186,147 +186,6 @@ function normalizeLongRows(source, rows) {
     return out;
 }
 function normalizeRows(source, rows) { const keys = Object.keys(rows?.[0] || {}); const longish = keys.some(k => /(parameter|component|nutrient)/.test(norm(k))) && keys.some(k => /(value|amount|content)/.test(norm(k))); return longish ? normalizeLongRows(source, rows) : normalizeWideRows(source, rows); }
-function macroFromUsda(id, name, unit) {
-    const n = norm(name), u = String(unit || '').toUpperCase();
-    if ([1008, 2047, 2048].includes(Number(id)) || (n === 'energy' && u === 'KCAL'))
-        return 'kcal';
-    if (Number(id) === 1003 || n === 'protein')
-        return 'protein';
-    if (Number(id) === 1005 || n.includes('carbohydrate by difference'))
-        return 'carbs';
-    if (Number(id) === 2000 || n === 'total sugars' || n === 'sugars total including nlea')
-        return 'sugar';
-    if (Number(id) === 1004 || n === 'total lipid fat')
-        return 'fat';
-    if (Number(id) === 1258 || n.includes('fatty acids total saturated'))
-        return 'saturatedFat';
-    if (Number(id) === 1079 || n.includes('fiber total dietary'))
-        return 'fiber';
-    if (Number(id) === 1093 || n === 'sodium na')
-        return 'sodium';
-    return null;
-}
-function friendlyUsda(name) {
-    const n = norm(name);
-    if (n.includes('18 3 n 3') || n.includes('alpha linolenic'))
-        return ['ALA', 'acido α-linolenico'];
-    if (n.includes('20 5 n 3') || n.includes('eicosapentaenoic'))
-        return ['EPA', 'acido eicosapentaenoico'];
-    if (n.includes('22 6 n 3') || n.includes('docosahexaenoic'))
-        return ['DHA', 'acido docosaesaenoico'];
-    if (n.includes('18 2 n 6') || n.includes('linoleic acid'))
-        return ['Acido linoleico (LA)', 'omega-6'];
-    const minerals = { magnesium: ['Magnesio', 'naturalmente presente / non specificata'], iron: ['Ferro', 'naturalmente presente / non specificata'], calcium: ['Calcio', 'naturalmente presente / non specificata'], potassium: ['Potassio', 'naturalmente presente / non specificata'], zinc: ['Zinco', 'naturalmente presente / non specificata'], copper: ['Rame', 'naturalmente presente / non specificata'], selenium: ['Selenio', 'naturalmente presente / non specificata'], phosphorus: ['Fosforo', 'naturalmente presente / non specificata'] };
-    for (const [k, v] of Object.entries(minerals))
-        if (n.startsWith(k))
-            return v;
-    if (n.includes('folate food'))
-        return ['Folati', 'alimentari'];
-    if (n === 'folic acid')
-        return ['Acido folico', 'aggiunto/sintetico'];
-    if (n.includes('vitamin b 12 added'))
-        return ['Vitamina B12', 'aggiunta'];
-    if (n.includes('vitamin b 12'))
-        return ['Vitamina B12', 'non specificata'];
-    const amino = { leucine: 'Leucina', isoleucine: 'Isoleucina', valine: 'Valina', lysine: 'Lisina', methionine: 'Metionina', threonine: 'Treonina', tryptophan: 'Triptofano', histidine: 'Istidina', phenylalanine: 'Fenilalanina' };
-    for (const [k, v] of Object.entries(amino))
-        if (n === k)
-            return [v, 'aminoacido'];
-    if (n === 'fructose')
-        return ['Fruttosio', 'zucchero semplice'];
-    if (n === 'glucose')
-        return ['Glucosio', 'zucchero semplice'];
-    if (n === 'galactose')
-        return ['Galattosio', 'zucchero semplice'];
-    if (n === 'lactose')
-        return ['Lattosio', 'disaccaride'];
-    if (n === 'sucrose')
-        return ['Saccarosio', 'disaccaride'];
-    return [name, 'non specificata'];
-}
-function unitUsda(u) { const x = String(u || '').toUpperCase(); return x === 'UG' ? 'µg' : x === 'MG' ? 'mg' : x === 'G' ? 'g' : x === 'KCAL' ? 'kcal' : u || ''; }
-function extractUsdaNutrient(fn) {
-    const nutrient = fn?.nutrient || {};
-    return { id: nutrient.id ?? fn.nutrientId ?? fn.nutrient_id, name: nutrient.name ?? fn.nutrientName ?? fn.nutrient_name, unit: nutrient.unitName ?? fn.unitName ?? fn.unit_name, amount: num(fn.amount ?? fn.value) };
-}
-function usdaFoodToNormalized(f, source = 'USDA_FOUNDATION') {
-    const label = emptyLabel(), nutrients = [], seen = new Set();
-    for (const fn of f?.foodNutrients || []) {
-        const x = extractUsdaNutrient(fn);
-        if (x.amount === null || !x.name)
-            continue;
-        const unit = unitUsda(x.unit);
-        const m = macroFromUsda(x.id, x.name, unit);
-        if (m) {
-            if (m === 'sodium') {
-                if (label.salt === '')
-                    label.salt = x.amount * 2.5 / (unit === 'mg' ? 1000 : 1);
-            }
-            else if (label[m] === '')
-                label[m] = x.amount;
-            continue;
-        }
-        if (!unit)
-            continue;
-        const [display, form] = friendlyUsda(x.name);
-        const dedupe = `${display}|${form}|${unit}`;
-        if (seen.has(dedupe))
-            continue;
-        seen.add(dedupe);
-        nutrients.push({ id: newId(), name: display, form, amount: x.amount, unit, source: SOURCE_META[source]?.name || 'USDA FoodData Central', sourceId: String(f.fdcId || ''), evidence: 'FoodData Central', rawName: x.name, bio: { mode: 'none', min: '', max: '', source: '' } });
-    }
-    const id = String(f.fdcId ?? f.fdc_id ?? '');
-    const officialName = clean(f.description || f.name);
-    return { localId: `${source}:${id || newId()}`, source, sourceId: id, name: officialName, officialName, brand: clean(f.brandName || f.brandOwner || ''), servingGrams: 100, label, ingredients: clean(f.ingredients || ''), nutrients, aliases: [], sourceInfo: { id: newId(), name: SOURCE_META[source]?.name || 'USDA FoodData Central', reference: `FDC ${id}`, quality: source === 'USDA_FOUNDATION' ? 'primaria' : 'secondaria', version: SOURCE_META[source]?.version || '', url: id ? `https://fdc.nal.usda.gov/fdc-app.html#/food-details/${id}/nutrients` : '' }, dataType: f.dataType || f.data_type || '' };
-}
-function normalizeUsdaJsonPayload(source, raw) {
-    let arr = [];
-    if (Array.isArray(raw))
-        arr = raw;
-    else if (raw && typeof raw === 'object') {
-        const preferred = ['FoundationFoods', 'SRLegacyFoods', 'SurveyFoods', 'BrandedFoods', 'foods'];
-        for (const k of preferred)
-            if (Array.isArray(raw[k])) {
-                arr = raw[k];
-                break;
-            }
-        if (!arr.length) {
-            const candidate = Object.values(raw).find(v => Array.isArray(v) && v.length && typeof v[0] === 'object');
-            if (candidate)
-                arr = candidate;
-        }
-    }
-    return arr.map(f => usdaFoodToNormalized(f, source)).filter(f => f.name);
-}
-function rowVal(r, aliases) { for (const [k, v] of Object.entries(r || {}))
-    if (aliases.some(a => norm(k) === norm(a)))
-        return v; return undefined; }
-function normalizeUsdaCsvTables(source, foodRows, nutrientRows, foodNutrientRows) {
-    const nutrientMap = new Map();
-    for (const r of nutrientRows || []) {
-        const id = String(rowVal(r, ['id', 'nutrient_id']) ?? '');
-        if (id)
-            nutrientMap.set(id, { id, name: rowVal(r, ['name', 'nutrient_name']), unitName: rowVal(r, ['unit_name', 'unit']) });
-    }
-    const foodMap = new Map();
-    for (const r of foodRows || []) {
-        const id = String(rowVal(r, ['fdc_id', 'fdc id']) ?? '');
-        const description = clean(rowVal(r, ['description', 'food description', 'name']));
-        if (id && description)
-            foodMap.set(id, { fdcId: id, description, dataType: rowVal(r, ['data_type', 'data type']), foodNutrients: [] });
-    }
-    for (const r of foodNutrientRows || []) {
-        const fdc = String(rowVal(r, ['fdc_id', 'fdc id']) ?? ''), nid = String(rowVal(r, ['nutrient_id', 'nutrient id']) ?? '');
-        const f = foodMap.get(fdc), n = nutrientMap.get(nid);
-        if (!f || !n)
-            continue;
-        const amount = num(rowVal(r, ['amount', 'value']));
-        if (amount === null)
-            continue;
-        f.foodNutrients.push({ nutrient: n, amount });
-    }
-    return [...foodMap.values()].map(f => usdaFoodToNormalized(f, source));
-}
 function scoreFood(q, f) {
     const name = norm(`${f.name || ''} ${f.officialName || ''}`), brand = norm(f.brand), aliases = (f.aliases || []).map(norm);
     if (!norm(q))
@@ -353,11 +212,6 @@ function scoreFood(q, f) {
     }
     if (brand && norm(q) === brand)
         s += 8;
-    // Le fonti generiche/scientifiche hanno un piccolo vantaggio nella ricerca quotidiana.
-    if (f.source === 'USDA_FOUNDATION')
-        s += 8;
-    else if (f.source === 'USDA_SR')
-        s += 5;
     return Math.max(0, s);
 }
 function searchLocalDataset(q, datasets, limit = 12) { const all = []; for (const [source, foods] of Object.entries(datasets || {}))
@@ -448,533 +302,419 @@ function openDb() { return new Promise((res, rej) => { const r = indexedDB.open(
 async function dbSet(k, v) { const db = await openDb(); return new Promise((res, rej) => { const tx = db.transaction('datasets', 'readwrite'); tx.objectStore('datasets').put(v, k); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); }); }
 async function dbGet(k) { const db = await openDb(); return new Promise((res, rej) => { const r = db.transaction('datasets').objectStore('datasets').get(k); r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error); }); }
 async function dbDel(k) { const db = await openDb(); return new Promise((res, rej) => { const tx = db.transaction('datasets', 'readwrite'); tx.objectStore('datasets').delete(k); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); }); }
-async function searchUsdaBranded(q, key) {
-    const url = new URL('https://api.nal.usda.gov/fdc/v1/foods/search');
-    url.searchParams.set('api_key', (key || 'DEMO_KEY').trim() || 'DEMO_KEY');
-    url.searchParams.set('query', q);
-    url.searchParams.set('dataType', 'Branded');
-    url.searchParams.set('pageSize', '15');
-    const r = await fetch(url);
-    if (!r.ok)
-        throw new Error(`USDA ${r.status}`);
-    const d = await r.json();
-    return (d.foods || []).map(f => ({ resultType: 'branded', source: 'USDA_BRANDED', sourceId: String(f.fdcId), name: f.description, brand: f.brandName || f.brandOwner || '', ingredients: f.ingredients || '', dataType: f.dataType || 'Branded' }));
-}
-async function fetchUsdaBrandedFood(id, key) { const r = await fetch(`https://api.nal.usda.gov/fdc/v1/food/${encodeURIComponent(id)}?api_key=${encodeURIComponent((key || 'DEMO_KEY').trim() || 'DEMO_KEY')}`); if (!r.ok)
-    throw new Error(`USDA ${r.status}`); return usdaFoodToNormalized(await r.json(), 'USDA_BRANDED'); }
 function parseSheetRows(data, type = 'array') { const wb = XLSX.read(data, { type }); let rows = []; for (const sn of wb.SheetNames) {
     const a = XLSX.utils.sheet_to_json(wb.Sheets[sn], { defval: '' });
     if (a.length)
         rows.push(...a);
 } return rows; }
-function Home() {
-    const [foods, setFoods] = useState([]), [logs, setLogs] = useState([]), [goals, setGoals] = useState(BASE_GOALS), [profile, setProfile] = useState({ weight: 80, proteinPerKg: 2, fatPerKg: .8, kcal: 2400 });
-    const [tab, setTab] = useState('oggi'), [foodDraft, setFoodDraft] = useState(null), [selectedFoodId, setSelectedFoodId] = useState(''), [grams, setGrams] = useState(100), [loaded, setLoaded] = useState(false);
-    const [query, setQuery] = useState(''), [searching, setSearching] = useState(false), [results, setResults] = useState([]), [searchError, setSearchError] = useState(''), [importing, setImporting] = useState('');
-    const [quickQuery, setQuickQuery] = useState(''), [commercialOnline, setCommercialOnline] = useState(false), [usdaApiKey, setUsdaApiKey] = useState('');
-    const [datasets, setDatasets] = useState({ USDA_FOUNDATION: [], USDA_SR: [], CIQUAL: [], FRIDA: [], COFID: [] }), [datasetStatus, setDatasetStatus] = useState({}), [datasetMsg, setDatasetMsg] = useState('');
-    useEffect(() => { try {
-        setFoods(JSON.parse(localStorage.getItem('nutritrace_foods') || '[]'));
-        setLogs(JSON.parse(localStorage.getItem('nutritrace_logs') || '[]'));
-        setGoals(JSON.parse(localStorage.getItem('nutritrace_goals_v3') || 'null') || BASE_GOALS);
-        setProfile(JSON.parse(localStorage.getItem('nutritrace_profile') || 'null') || profile);
-        setCommercialOnline(localStorage.getItem('nutritrace_commercial_online') === '1');
-        setUsdaApiKey(localStorage.getItem('nutritrace_usda_key') || '');
-    }
-    finally {
-        setLoaded(true);
-    } ; if ('serviceWorker' in navigator)
-        navigator.serviceWorker.register('/sw.js').catch(() => { }); (async () => { const obj = {}; const st = {}; for (const source of SCIENTIFIC_SOURCES) {
-        obj[source] = await dbGet(source);
-        st[source] = obj[source].length;
-    } setDatasets(obj); setDatasetStatus(st); })(); }, []);
-    useEffect(() => { if (loaded)
-        localStorage.setItem('nutritrace_foods', JSON.stringify(foods)); }, [foods, loaded]);
-    useEffect(() => { if (loaded)
-        localStorage.setItem('nutritrace_logs', JSON.stringify(logs)); }, [logs, loaded]);
-    useEffect(() => { if (loaded)
-        localStorage.setItem('nutritrace_goals_v3', JSON.stringify(goals)); }, [goals, loaded]);
-    useEffect(() => { if (loaded)
-        localStorage.setItem('nutritrace_profile', JSON.stringify(profile)); }, [profile, loaded]);
-    useEffect(() => { if (loaded)
-        localStorage.setItem('nutritrace_commercial_online', commercialOnline ? '1' : '0'); }, [commercialOnline, loaded]);
-    useEffect(() => { if (loaded)
-        localStorage.setItem('nutritrace_usda_key', usdaApiKey); }, [usdaApiKey, loaded]);
-    const todayLogs = logs.filter(l => l.date === dateKey()), weekLogs = logs.filter(l => new Date(`${l.date}T12:00:00`) >= startOfWeek());
-    const totals = useMemo(() => aggregate(todayLogs, foods), [todayLogs, foods]), weekTotals = useMemo(() => aggregate(weekLogs, foods), [weekLogs, foods]);
-    const omega = { ala: nutrientTotal(totals, 'ALA', 'mg'), epa: nutrientTotal(totals, 'EPA', 'mg'), dha: nutrientTotal(totals, 'DHA', 'mg') };
-    const eaa = Object.fromEntries(EAA.map(n => [n, nutrientTotal(totals, n, 'g')]));
-    const recentIds = [...logs].reverse().map(l => l.foodId).filter((id, i, a) => a.indexOf(id) === i).slice(0, 6);
-    const quickSuggestions = useMemo(() => { if (!quickQuery.trim())
-        return recentIds.map(id => foods.find(f => f.id === id)).filter(Boolean).map(f => ({ ...f, resultType: 'personal' })); const personal = searchPersonalFoods(quickQuery, foods, 5), local = searchLocalDataset(quickQuery, datasets, 7).map(f => ({ ...f, resultType: 'local' })); return [...personal, ...local].slice(0, 8); }, [quickQuery, foods, datasets, logs]);
-    function valueForGoal(g, ag) { if (Object.keys(MACROS).includes(g.id))
-        return ag[g.id] || 0; return nutrientTotal(ag, g.name, g.unit, g.form || '*'); }
-    function saveFood() { if (!foodDraft?.name.trim())
-        return; const f = { ...foodDraft, additives: parseAdditives(foodDraft.ingredients) }; setFoods(p => [...p.filter(x => x.id !== f.id), f]); setFoodDraft(null); }
-    function addLog() { if (!selectedFoodId || Number(grams) <= 0)
-        return; setLogs(p => [...p, { id: crypto.randomUUID(), date: dateKey(), foodId: selectedFoodId, grams: Number(grams) }]); }
-    async function searchFoods() { if (!query.trim())
-        return; setSearching(true); setSearchError(''); try {
-        const local = searchLocalDataset(query, datasets, 24).map(f => ({ ...f, resultType: 'local' }));
-        let online = [];
-        if (commercialOnline) {
-            try {
-                online = await searchUsdaBranded(query, usdaApiKey);
-            }
-            catch (e) {
-                setSearchError(`Prodotti commerciali online non disponibili: ${e.message}. I database scientifici locali continuano a funzionare.`);
-            }
-        }
-        setResults([...local, ...online].slice(0, 36));
-    }
-    finally {
-        setSearching(false);
-    } }
-    function materializeImported(f, alias = '') { const source = f.sourceInfo || f.source; const useAlias = alias.trim() && f.source !== 'USDA_BRANDED'; return { ...emptyFood(), source: f.source || '', sourceId: f.sourceId || '', name: useAlias ? alias.trim() : f.name, officialName: f.officialName || f.name, aliases: [...new Set([...(f.aliases || []), ...(useAlias ? [alias.trim()] : [])])], brand: f.brand || '', servingGrams: f.servingGrams || 100, label: f.label || emptyFood().label, ingredients: f.ingredients || '', nutrients: f.nutrients || [], sources: [source], mergeMeta: { importedFrom: f.source || source?.name } }; }
-    function openImported(f, alias = query) { const same = foods.find(z => (z.sourceId && z.sourceId === f.sourceId) || (z.name.toLowerCase() === f.name.toLowerCase() && (z.brand || '').toLowerCase() === (f.brand || '').toLowerCase())); const source = f.sourceInfo || f.source; if (same)
-        setFoodDraft({ ...structuredClone(same), aliases: [...new Set([...(same.aliases || []), ...(alias.trim() ? [alias.trim()] : [])])], sources: [...(same.sources || []), source], nutrients: [...(same.nutrients || []), ...(f.nutrients || [])], mergeMeta: { mode: 'review', candidate: f } });
-    else
-        setFoodDraft(materializeImported(f, alias)); setTab('alimenti'); }
-    async function importResult(r) { if (r.resultType === 'local') {
-        openImported(r, query);
-        return;
-    } setImporting(r.sourceId); setSearchError(''); try {
-        const f = await fetchUsdaBrandedFood(r.sourceId, usdaApiKey);
-        openImported(f, '');
-    }
-    catch (e) {
-        setSearchError(e.message);
-    }
-    finally {
-        setImporting('');
-    } }
-    function addFoodLog(foodId, g = grams) { if (!foodId || Number(g) <= 0)
-        return; setLogs(p => [...p, { id: crypto.randomUUID(), date: dateKey(), foodId, grams: Number(g) }]); }
-    function quickAdd(r) { if (Number(grams) <= 0)
-        return; if (r.resultType === 'personal') {
-        addFoodLog(r.id);
-        setQuickQuery('');
-        return;
-    } const f = materializeImported(r, quickQuery || r.name); setFoods(p => [...p, f]); setLogs(p => [...p, { id: crypto.randomUUID(), date: dateKey(), foodId: f.id, grams: Number(grams) }]); setQuickQuery(''); }
-    function applyPerKg() { setGoals(gs => gs.map(g => g.id === 'kcal' ? { ...g, target: Number(profile.kcal) } : g.id === 'protein' ? { ...g, target: Number(profile.weight) * Number(profile.proteinPerKg) } : g.id === 'fat' ? { ...g, target: Number(profile.weight) * Number(profile.fatPerKg) } : g)); }
-    function exportData() { const b = new Blob([JSON.stringify({ version: 3, foods, logs, goals, profile }, null, 2)], { type: 'application/json' }), u = URL.createObjectURL(b), a = document.createElement('a'); a.href = u; a.download = `nutritrace-${dateKey()}.json`; a.click(); URL.revokeObjectURL(u); }
-    function importBackup(e) { const f = e.target.files?.[0]; if (!f)
-        return; const rd = new FileReader(); rd.onload = () => { try {
-        const d = JSON.parse(rd.result);
-        if (d.foods)
-            setFoods(d.foods);
-        if (d.logs)
-            setLogs(d.logs);
-        if (d.goals)
-            setGoals(d.goals);
-        if (d.profile)
-            setProfile(d.profile);
-    }
-    catch {
-        alert('Backup non valido');
-    } }; rd.readAsText(f); }
-    async function importDataset(source, file) {
-        setDatasetMsg(`Importazione ${SOURCE_META[source]?.name || source}…`);
-        try {
-            const buf = await file.arrayBuffer();
-            let normalized = [];
-            const lower = file.name.toLowerCase();
-            if (source === 'USDA_FOUNDATION' || source === 'USDA_SR') {
-                if (lower.endsWith('.json'))
-                    normalized = normalizeUsdaJsonPayload(source, JSON.parse(new TextDecoder().decode(buf)));
-                else if (lower.endsWith('.zip')) {
-                    const files = unzipSync(new Uint8Array(buf));
-                    const names = Object.keys(files);
-                    const jsonName = names.find(n => n.toLowerCase().endsWith('.json'));
-                    if (jsonName)
-                        normalized = normalizeUsdaJsonPayload(source, JSON.parse(strFromU8(files[jsonName])));
-                    else {
-                        const foodName = names.find(n => /(^|\/)food\.csv$/i.test(n)), nutName = names.find(n => /(^|\/)nutrient\.csv$/i.test(n)), fnName = names.find(n => /(^|\/)food_nutrient\.csv$/i.test(n));
-                        if (!foodName || !nutName || !fnName)
-                            throw new Error('Archivio USDA non riconosciuto. Usa il download JSON o CSV ufficiale del singolo dataset.');
-                        const foodRows = parseSheetRows(strFromU8(files[foodName]), 'string'), nutRows = parseSheetRows(strFromU8(files[nutName]), 'string'), fnRows = parseSheetRows(strFromU8(files[fnName]), 'string');
-                        normalized = normalizeUsdaCsvTables(source, foodRows, nutRows, fnRows);
-                    }
-                }
-                else
-                    throw new Error('Per USDA usa il file JSON o ZIP ufficiale.');
-            }
-            else
-                normalized = normalizeRows(source, parseSheetRows(buf, 'array'));
-            if (!normalized.length)
-                throw new Error('Formato non riconosciuto o nessun alimento trovato.');
-            await dbSet(source, normalized);
-            setDatasets(d => ({ ...d, [source]: normalized }));
-            setDatasetStatus(st => ({ ...st, [source]: normalized.length }));
-            setDatasetMsg(`${SOURCE_META[source].name}: ${normalized.length} alimenti indicizzati e disponibili offline.`);
-        }
-        catch (e) {
-            setDatasetMsg(`Errore ${source}: ${e.message}`);
-        }
-    }
-    async function removeDataset(source) { await dbDel(source); setDatasets(d => ({ ...d, [source]: [] })); setDatasetStatus(s => ({ ...s, [source]: 0 })); setDatasetMsg(`${source} rimosso.`); }
-    const addNutrient = () => setFoodDraft({ ...foodDraft, nutrients: [...(foodDraft.nutrients || []), emptyNutrient()] });
-    function editNutrient(i, patch) { const a = [...foodDraft.nutrients]; a[i] = { ...a[i], ...patch }; setFoodDraft({ ...foodDraft, nutrients: a }); }
-    return React.createElement("main", null,
-        React.createElement("header", { className: "hero" },
-            React.createElement("div", null,
-                React.createElement("div", { className: "eyebrow" }, "DIARIO NUTRIZIONALE PERSONALE \u00B7 V1.1 LOCAL-FIRST"),
-                React.createElement("h1", null, "NutriTrace"),
-                React.createElement("p", null, "Quantit\u00E0, forme chimiche, ingredienti, biodisponibilit\u00E0 e provenienza del dato.")),
-            React.createElement("div", { className: "privacy" }, "\u25CF Local-first \u00B7 dati sul dispositivo")),
-        React.createElement("nav", { className: "tabs" }, ['oggi', 'ricerca', 'alimenti', 'obiettivi', 'dati'].map(x => React.createElement("button", { key: x, className: tab === x ? 'active' : '', onClick: () => setTab(x) }, x[0].toUpperCase() + x.slice(1)))),
-        tab === 'oggi' && React.createElement("section", null,
-            React.createElement("div", { className: "grid5" }, [['kcal', 'Energia', 'kcal'], ['protein', 'Proteine', 'g'], ['carbs', 'Carboidrati', 'g'], ['fat', 'Grassi', 'g'], ['fiber', 'Fibre', 'g']].map(([id, n, u], i) => { const g = goals.find(x => x.id === id); return React.createElement("article", { className: `metric ${i === 0 ? 'primary' : ''}`, key: id },
-                React.createElement("span", null, n),
-                React.createElement(Progress, { value: totals[id], goal: g?.target || 0, unit: u, kind: g?.kind })); })),
-            React.createElement("div", { className: "twoCol" },
-                React.createElement("article", { className: "card quickDiary" },
-                    React.createElement("h2", null, "Scrivi cosa hai mangiato"),
-                    React.createElement("p", { className: "muted" }, "Niente marca obbligatoria: prova semplicemente \u201Cpasta integrale\u201D, \u201Cmela\u201D, \u201Cpollo\u201D\u2026"),
-                    React.createElement("div", { className: "quickInputs" },
-                        React.createElement("input", { value: quickQuery, onChange: e => setQuickQuery(e.target.value), placeholder: "Alimento generico\u2026" }),
-                        React.createElement("label", null,
-                            "grammi",
-                            React.createElement("input", { type: "number", inputMode: "decimal", value: grams, onChange: e => setGrams(e.target.value) }))),
-                    React.createElement("div", { className: "quickSuggestions" }, quickSuggestions.map((r, i) => React.createElement("button", { className: "quickChoice", key: `${r.resultType}-${r.id || r.localId || i}`, onClick: () => quickAdd(r) },
-                        React.createElement("span", null,
-                            React.createElement("b", null, r.resultType === 'personal' ? r.name : (quickQuery || r.name)),
-                            React.createElement("small", null, r.resultType === 'personal' ? 'Già nel tuo archivio' : `${r.name} · ${SOURCE_META[r.source]?.name || r.source}`)),
-                        React.createElement("strong", null,
-                            "+ ",
-                            grams,
-                            " g")))),
-                    quickQuery.trim() && !quickSuggestions.length && React.createElement("button", { className: "ghost", onClick: () => { setFoodDraft({ ...emptyFood(), name: quickQuery.trim(), aliases: [quickQuery.trim()] }); setTab('alimenti'); } },
-                        "Crea \u201C",
-                        quickQuery.trim(),
-                        "\u201D manualmente"),
-                    React.createElement("details", { className: "archiveFallback" },
-                        React.createElement("summary", null, "Scegli dall\u2019archivio personale"),
-                        foods.length ? React.createElement("div", { className: "archiveInline" },
-                            React.createElement("select", { value: selectedFoodId, onChange: e => setSelectedFoodId(e.target.value) },
-                                React.createElement("option", { value: "" }, "Seleziona\u2026"),
-                                foods.map(f => React.createElement("option", { key: f.id, value: f.id },
-                                    f.name,
-                                    f.brand ? ` — ${f.brand}` : ''))),
-                            React.createElement("button", { className: "ghost", onClick: addLog }, "Aggiungi")) : React.createElement("small", null, "Nessun alimento salvato."))),
-                React.createElement("article", { className: "card" },
-                    React.createElement("h2", null, "Dettaglio di oggi"),
-                    React.createElement("div", { className: "miniGrid" },
-                        React.createElement("div", null,
-                            React.createElement("small", null, "Zuccheri"),
-                            React.createElement("strong", null,
-                                fmt(totals.sugar),
-                                " g")),
-                        React.createElement("div", null,
-                            React.createElement("small", null, "Saturi"),
-                            React.createElement("strong", null,
-                                fmt(totals.saturatedFat),
-                                " g")),
-                        React.createElement("div", null,
-                            React.createElement("small", null, "Sale"),
-                            React.createElement("strong", null,
-                                fmt(totals.salt),
-                                " g")),
-                        React.createElement("div", null,
-                            React.createElement("small", null, "Voci"),
-                            React.createElement("strong", null, todayLogs.length))))),
-            React.createElement("div", { className: "twoCol" },
-                React.createElement("article", { className: "card" },
-                    React.createElement("h2", null, "Omega\u20113"),
-                    React.createElement("div", { className: "miniGrid" },
-                        React.createElement("div", null,
-                            React.createElement("small", null, "ALA"),
-                            React.createElement("strong", null,
-                                fmt(omega.ala, 2),
-                                " mg")),
-                        React.createElement("div", null,
-                            React.createElement("small", null, "EPA"),
-                            React.createElement("strong", null,
-                                fmt(omega.epa, 2),
-                                " mg")),
-                        React.createElement("div", null,
-                            React.createElement("small", null, "DHA"),
-                            React.createElement("strong", null,
-                                fmt(omega.dha, 2),
-                                " mg")),
-                        React.createElement("div", null,
-                            React.createElement("small", null, "EPA + DHA"),
-                            React.createElement("strong", null,
-                                fmt(omega.epa + omega.dha, 2),
-                                " mg"))),
-                    React.createElement("p", { className: "muted tiny" }, "ALA, EPA e DHA restano separati: l\u2019app non trasforma automaticamente ALA in EPA/DHA.")),
-                React.createElement("article", { className: "card" },
-                    React.createElement("h2", null, "Aminoacidi essenziali"),
-                    React.createElement("div", { className: "aminoGrid" }, EAA.map(n => React.createElement("div", { key: n },
-                        React.createElement("small", null, n),
-                        React.createElement("b", null,
-                            fmt(eaa[n], 2),
-                            " g")))))),
-            React.createElement("article", { className: "card" },
-                React.createElement("h2", null, "Alimenti consumati"),
-                !todayLogs.length ? React.createElement("p", { className: "empty" }, "Nessun alimento oggi.") : React.createElement("div", { className: "list" }, todayLogs.map(l => { const f = foods.find(x => x.id === l.foodId); return React.createElement("div", { className: "row", key: l.id },
-                    React.createElement("div", null,
-                        React.createElement("strong", null, f?.name || 'Alimento eliminato'),
-                        React.createElement("small", null, f?.brand || '')),
-                    React.createElement("span", null,
-                        l.grams,
-                        " g"),
-                    React.createElement("button", { className: "ghost danger", onClick: () => setLogs(logs.filter(x => x.id !== l.id)) }, "Rimuovi")); }))),
-            React.createElement("article", { className: "card" },
-                React.createElement("h2", null, "Micronutrienti, forme e quota assorbibile"),
-                !Object.keys(totals.nutrients).length ? React.createElement("p", { className: "empty" }, "Nessun micronutriente registrato.") : React.createElement("div", { className: "nutriTable" }, Object.entries(totals.nutrients).sort().map(([k, v]) => { const [n, form, unit] = k.split('|'); return React.createElement("div", { className: "bioRow", key: k },
-                    React.createElement("div", null,
-                        React.createElement("strong", null, n),
-                        React.createElement("small", null, form)),
-                    React.createElement("b", null,
-                        fmt(v.amount, 2),
-                        " ",
-                        unit),
-                    React.createElement("span", null, v.hasBio ? `assorbibile stimato ${fmt(v.absorbedMin, 2)}–${fmt(v.absorbedMax, 2)} ${unit}` : 'assorbimento non stimato')); })))),
-        tab === 'ricerca' && React.createElement("section", null,
-            React.createElement("div", { className: "sectionHead" },
-                React.createElement("div", null,
-                    React.createElement("h2", null, "Ricerca alimenti"),
-                    React.createElement("p", null, "Prima i database scientifici salvati sul dispositivo. I prodotti di marca online sono facoltativi."))),
-            React.createElement("article", { className: "card" },
-                React.createElement("div", { className: "searchBox" },
-                    React.createElement("input", { value: query, onChange: e => setQuery(e.target.value), onKeyDown: e => e.key === 'Enter' && searchFoods(), placeholder: "es. pasta integrale, salmone, lenticchie\u2026" }),
-                    React.createElement("button", { className: "cta", onClick: searchFoods, disabled: searching }, searching ? 'Ricerca…' : 'Cerca')),
-                searchError && React.createElement("p", { className: "errorText" }, searchError),
-                React.createElement("div", { className: "sourceBadges" }, SCIENTIFIC_SOURCES.map(source => React.createElement("span", { key: source, className: datasetStatus[source] ? 'online' : '' },
-                    source.replace('USDA_', 'USDA '),
-                    " \u00B7 ",
-                    datasetStatus[source] ? `${datasetStatus[source]} alimenti offline` : 'da installare'))),
-                results.map((r, i) => React.createElement("div", { className: "searchResult", key: `${r.resultType}-${r.sourceId || r.localId}-${i}` },
-                    React.createElement("div", null,
-                        React.createElement("strong", null, r.name),
-                        React.createElement("small", null,
-                            r.brand || '',
-                            r.brand ? ' · ' : '',
-                            r.resultType === 'local' ? SOURCE_META[r.source]?.name : 'USDA Branded online')),
-                    React.createElement("button", { className: "ghost", disabled: importing === r.sourceId, onClick: () => importResult(r) }, importing === r.sourceId ? 'Carico…' : 'Salva nel mio archivio')))),
-            React.createElement("article", { className: "card onlineOptional" },
-                React.createElement("div", { className: "toggleRow" },
-                    React.createElement("div", null,
-                        React.createElement("b", null, "Prodotti commerciali USDA online"),
-                        React.createElement("p", { className: "muted" }, "Opzionale. Utile solo quando vuoi cercare una marca/prodotto specifico; il diario normale non ne ha bisogno.")),
-                    React.createElement("label", { className: "switchLine" },
-                        React.createElement("input", { type: "checkbox", checked: commercialOnline, onChange: e => setCommercialOnline(e.target.checked) }),
-                        " Attiva")),
-                commercialOnline && React.createElement("label", null,
-                    "API key USDA facoltativa ",
-                    React.createElement("input", { type: "password", value: usdaApiKey, onChange: e => setUsdaApiKey(e.target.value), placeholder: "vuoto = DEMO_KEY" }),
-                    React.createElement("small", null, "Resta memorizzata solo su questo dispositivo."))),
-            React.createElement("article", { className: "card notice" },
-                React.createElement("b", null, "Uso quotidiano semplice"),
-                React.createElement("p", null, "Quando selezioni per la prima volta un alimento scientifico cercando, per esempio, \u201Cpasta integrale\u201D, NutriTrace salva quel testo come alias personale. Da quel momento puoi continuare a scrivere semplicemente \u201Cpasta integrale\u201D, senza marca e senza ripetere i dettagli della fonte."))),
-        tab === 'alimenti' && React.createElement("section", null,
-            React.createElement("div", { className: "sectionHead" },
-                React.createElement("div", null,
-                    React.createElement("h2", null, "Archivio alimenti"),
-                    React.createElement("p", null, "Etichetta, ingredienti, micronutrienti, forme e fonti.")),
-                React.createElement("button", { className: "cta", onClick: () => setFoodDraft(emptyFood()) }, "+ Nuovo alimento")),
-            !foods.length ? React.createElement("article", { className: "card empty" }, "Non hai ancora alimenti.") : React.createElement("div", { className: "foodCards" }, foods.map(f => React.createElement("article", { className: "card", key: f.id },
-                React.createElement("div", { className: "cardTitle" },
-                    React.createElement("div", null,
-                        React.createElement("h3", null, f.name),
-                        React.createElement("p", null,
-                            f.brand || 'Senza marca',
-                            " \u00B7 per ",
-                            f.servingGrams,
-                            " g")),
-                    React.createElement("button", { className: "ghost", onClick: () => setFoodDraft(structuredClone(f)) }, "Modifica")),
-                React.createElement("div", { className: "macroLine" },
-                    React.createElement("span", null,
-                        fmt(f.label.kcal),
-                        " kcal"),
-                    React.createElement("span", null,
-                        "P ",
-                        fmt(f.label.protein),
-                        " g"),
-                    React.createElement("span", null,
-                        "C ",
-                        fmt(f.label.carbs),
-                        " g"),
-                    React.createElement("span", null,
-                        "G ",
-                        fmt(f.label.fat),
-                        " g")),
-                f.additives?.length > 0 && React.createElement("div", { className: "chips" }, f.additives.map(a => React.createElement("span", { key: a }, a))),
-                React.createElement("small", { className: "sourceText" },
-                    "Fonti: ",
-                    f.sources?.length ? f.sources.map(s => s?.name || s).join(', ') : 'manuale'))))),
-        tab === 'obiettivi' && React.createElement("section", null,
-            React.createElement("div", { className: "twoCol" },
-                React.createElement("article", { className: "card" },
-                    React.createElement("h2", null, "Calcolo per peso corporeo"),
-                    React.createElement("div", { className: "formGrid" },
-                        React.createElement("label", null,
-                            "Peso (kg)",
-                            React.createElement("input", { type: "number", step: "any", value: profile.weight, onChange: e => setProfile({ ...profile, weight: e.target.value }) })),
-                        React.createElement("label", null,
-                            "Proteine (g/kg)",
-                            React.createElement("input", { type: "number", step: "any", value: profile.proteinPerKg, onChange: e => setProfile({ ...profile, proteinPerKg: e.target.value }) })),
-                        React.createElement("label", null,
-                            "Grassi (g/kg)",
-                            React.createElement("input", { type: "number", step: "any", value: profile.fatPerKg, onChange: e => setProfile({ ...profile, fatPerKg: e.target.value }) })),
-                        React.createElement("label", null,
-                            "Calorie target",
-                            React.createElement("input", { type: "number", value: profile.kcal, onChange: e => setProfile({ ...profile, kcal: e.target.value }) }))),
-                    React.createElement("button", { className: "cta", onClick: applyPerKg }, "Applica ai target")),
-                React.createElement("article", { className: "card" },
-                    React.createElement("h2", null, "Stato settimanale"),
-                    goals.filter(g => g.period === 'week').map(g => React.createElement("div", { key: g.id, className: "goalStatus" },
-                        React.createElement("span", null, g.name),
-                        React.createElement(Progress, { value: valueForGoal(g, weekTotals), goal: g.target, unit: g.unit, kind: g.kind }))))),
-            React.createElement("article", { className: "card" },
-                React.createElement("div", { className: "cardTitle" },
-                    React.createElement("div", null,
-                        React.createElement("h2", null, "Obiettivi nutrienti"),
-                        React.createElement("p", null, "Minimo, target o limite massimo; giornaliero o settimanale; anche per forma specifica.")),
-                    React.createElement("button", { className: "ghost", onClick: () => setGoals([...goals, { id: crypto.randomUUID(), name: 'Nuovo nutriente', form: '*', unit: 'mg', target: 0, period: 'day', kind: 'minimum' }]) }, "+ Nutriente")),
-                React.createElement("div", { className: "goalTable" }, goals.map((g, i) => React.createElement("div", { className: "goalEdit", key: g.id },
-                    React.createElement("input", { value: g.name, onChange: e => { const a = [...goals]; a[i] = { ...g, name: e.target.value }; setGoals(a); } }),
-                    React.createElement("input", { placeholder: "forma: * = tutte", value: g.form || '*', onChange: e => { const a = [...goals]; a[i] = { ...g, form: e.target.value }; setGoals(a); } }),
-                    React.createElement("input", { type: "number", step: "any", value: g.target, onChange: e => { const a = [...goals]; a[i] = { ...g, target: Number(e.target.value) }; setGoals(a); } }),
-                    React.createElement("select", { value: g.unit, onChange: e => { const a = [...goals]; a[i] = { ...g, unit: e.target.value }; setGoals(a); } },
-                        React.createElement("option", null, "kcal"),
-                        React.createElement("option", null, "g"),
-                        React.createElement("option", null, "mg"),
-                        React.createElement("option", null, "\u00B5g")),
-                    React.createElement("select", { value: g.kind, onChange: e => { const a = [...goals]; a[i] = { ...g, kind: e.target.value }; setGoals(a); } },
-                        React.createElement("option", { value: "minimum" }, "Minimo"),
-                        React.createElement("option", { value: "target" }, "Target"),
-                        React.createElement("option", { value: "upper" }, "Massimo")),
-                    React.createElement("select", { value: g.period, onChange: e => { const a = [...goals]; a[i] = { ...g, period: e.target.value }; setGoals(a); } },
-                        React.createElement("option", { value: "day" }, "Giorno"),
-                        React.createElement("option", { value: "week" }, "Settimana")),
-                    React.createElement("div", { className: "goalNow" },
-                        fmt(valueForGoal(g, g.period === 'week' ? weekTotals : totals), 2),
-                        " ",
-                        g.unit),
-                    React.createElement("button", { className: "ghost danger", onClick: () => setGoals(goals.filter(x => x.id !== g.id)) }, "\u00D7")))))),
-        tab === 'dati' && React.createElement("section", null,
-            React.createElement("div", { className: "twoCol" },
-                React.createElement("article", { className: "card" },
-                    React.createElement("h2", null, "Database sul dispositivo"),
-                    React.createElement("div", { className: "sourceList" },
-                        SCIENTIFIC_SOURCES.map(source => React.createElement("div", { key: source },
-                            React.createElement("b", null, SOURCE_META[source].name),
-                            React.createElement("span", null, datasetStatus[source] ? `${datasetStatus[source]} alimenti · offline` : 'non installato'))),
-                        React.createElement("div", null,
-                            React.createElement("b", null, "USDA prodotti commerciali"),
-                            React.createElement("span", null, commercialOnline ? 'online opzionale attivo' : 'disattivato')),
-                        React.createElement("div", null,
-                            React.createElement("b", null, "Etichetta produttore"),
-                            React.createElement("span", null, "priorit\u00E0 massima sul prodotto specifico")))),
-                React.createElement("article", { className: "card" },
-                    React.createElement("h2", null, "Backup"),
-                    React.createElement("button", { className: "cta", onClick: exportData }, "Esporta JSON"),
-                    React.createElement("label", { className: "importLabel" },
-                        "Importa backup",
-                        React.createElement("input", { type: "file", accept: "application/json", onChange: importBackup })),
-                    React.createElement("p", { className: "muted tiny" }, "I database scientifici grandi restano in IndexedDB e non vengono duplicati nel backup del diario."))),
-            React.createElement("article", { className: "card" },
-                React.createElement("h2", null, "Installa / aggiorna database scientifici"),
-                React.createElement("p", { className: "muted" }, "Questi file vengono letti una volta e indicizzati sul dispositivo. Dopo l\u2019importazione la ricerca funziona offline. Per USDA puoi selezionare direttamente il download JSON/ZIP ufficiale di Foundation Foods o SR Legacy; per CIQUAL, FRIDA e CoFID usa il loro file tabellare ufficiale."),
-                React.createElement("div", { className: "datasetGrid" }, SCIENTIFIC_SOURCES.map(source => React.createElement("div", { className: "datasetCard", key: source },
-                    React.createElement("b", null, SOURCE_META[source].name),
-                    React.createElement("small", null, SOURCE_META[source].version),
-                    React.createElement("input", { type: "file", accept: source.startsWith('USDA_') ? '.zip,.json' : '.xlsx,.xls,.csv,.ods', onChange: e => e.target.files?.[0] && importDataset(source, e.target.files[0]) }),
-                    datasetStatus[source] > 0 && React.createElement("button", { className: "ghost danger", onClick: () => removeDataset(source) }, "Rimuovi dataset")))),
-                datasetMsg && React.createElement("p", { className: "statusMsg" }, datasetMsg)),
-            React.createElement("article", { className: "card notice" },
-                React.createElement("h3", null, "Privacy e funzionamento offline"),
-                React.createElement("p", null, "Diario, profilo, alimenti personali e database scientifici sono memorizzati localmente. La rete viene usata solo se attivi volontariamente la ricerca dei prodotti commerciali online o quando scarichi un aggiornamento dei dataset.")),
-            React.createElement("article", { className: "card notice" },
-                React.createElement("h3", null, "Come leggere la biodisponibilit\u00E0"),
-                React.createElement("p", null, "La quota \u201Cassorbibile stimata\u201D compare solo quando nella scheda del nutriente \u00E8 presente un intervallo di assorbimento con una fonte. Per ferro, magnesio e altri nutrienti l\u2019assorbimento dipende anche da dieta, dose, matrice alimentare e fisiologia: il valore \u00E8 quindi una stima, non una misura individuale."))),
-        foodDraft && React.createElement("div", { className: "modalBackdrop" },
-            React.createElement("div", { className: "modal" },
-                React.createElement("div", { className: "modalHead" },
-                    React.createElement("div", null,
-                        React.createElement("span", { className: "eyebrow" }, "SCHEDA ALIMENTO"),
-                        React.createElement("h2", null, foodDraft.name || 'Nuovo alimento')),
-                    React.createElement("button", { className: "close", onClick: () => setFoodDraft(null) }, "\u00D7")),
-                foodDraft.mergeMeta?.mode === 'review' && React.createElement("div", { className: "mergeWarning" },
-                    React.createElement("b", null, "Possibile corrispondenza con un alimento gi\u00E0 presente."),
-                    " Controlla i dati importati: l\u2019etichetta manuale non viene sostituita automaticamente."),
-                React.createElement("div", { className: "formGrid" },
-                    React.createElement("label", null,
-                        "Nome rapido",
-                        React.createElement("input", { value: foodDraft.name, onChange: e => setFoodDraft({ ...foodDraft, name: e.target.value }) }),
-                        React.createElement("small", null, "\u00C8 il nome che userai ogni giorno.")),
-                    React.createElement("label", null,
-                        "Marca (opzionale)",
-                        React.createElement("input", { value: foodDraft.brand, onChange: e => setFoodDraft({ ...foodDraft, brand: e.target.value }) })),
-                    React.createElement("label", null,
-                        "Valori riferiti a (g)",
-                        React.createElement("input", { type: "number", value: foodDraft.servingGrams, onChange: e => setFoodDraft({ ...foodDraft, servingGrams: e.target.value }) }))),
-                foodDraft.officialName && foodDraft.officialName !== foodDraft.name && React.createElement("p", { className: "officialName" },
-                    React.createElement("b", null, "Voce ufficiale:"),
-                    " ",
-                    foodDraft.officialName),
-                React.createElement("label", null,
-                    "Alias di ricerca (separati da virgola)",
-                    React.createElement("input", { value: (foodDraft.aliases || []).join(', '), onChange: e => setFoodDraft({ ...foodDraft, aliases: e.target.value.split(',').map(x => x.trim()).filter(Boolean) }) })),
-                React.createElement("h3", null, "Etichetta / macro"),
-                React.createElement("div", { className: "formGrid" }, Object.entries(MACROS).map(([k, l]) => React.createElement("label", { key: k },
-                    l,
-                    React.createElement("input", { type: "number", step: "any", value: foodDraft.label?.[k] ?? '', onChange: e => setFoodDraft({ ...foodDraft, label: { ...foodDraft.label, [k]: e.target.value } }) })))),
-                React.createElement("h3", null, "Ingredienti completi"),
-                React.createElement("label", null,
-                    "Lista come in etichetta",
-                    React.createElement("textarea", { rows: "4", value: foodDraft.ingredients || '', onChange: e => setFoodDraft({ ...foodDraft, ingredients: e.target.value }) })),
-                parseAdditives(foodDraft.ingredients).length > 0 && React.createElement("div", { className: "chips" }, parseAdditives(foodDraft.ingredients).map(a => React.createElement("span", { key: a }, a))),
-                React.createElement("div", { className: "cardTitle" },
-                    React.createElement("div", null,
-                        React.createElement("h3", null, "Nutrienti specifici / forme"),
-                        React.createElement("p", null, "Quantit\u00E0 per la base indicata sopra. \u201CElementare\u201D \u00E8 opzionale per sali/composti.")),
-                    React.createElement("button", { className: "ghost", onClick: addNutrient }, "+ Aggiungi")),
-                (foodDraft.nutrients || []).map((n, i) => React.createElement("div", { className: "nutrientAdvanced", key: n.id },
-                    React.createElement("div", { className: "nutrientMain" },
-                        React.createElement("input", { placeholder: "Magnesio / EPA / Leucina", value: n.name, onChange: e => editNutrient(i, { name: e.target.value }) }),
-                        React.createElement("input", { placeholder: "forma: citrato, eme, ALA\u2026", value: n.form || '', onChange: e => editNutrient(i, { form: e.target.value }) }),
-                        React.createElement("input", { type: "number", step: "any", placeholder: "quantit\u00E0", value: n.amount, onChange: e => editNutrient(i, { amount: e.target.value }) }),
-                        React.createElement("select", { value: n.unit, onChange: e => editNutrient(i, { unit: e.target.value }) },
-                            React.createElement("option", null, "mg"),
-                            React.createElement("option", null, "\u00B5g"),
-                            React.createElement("option", null, "g")),
-                        React.createElement("button", { className: "ghost danger", onClick: () => setFoodDraft({ ...foodDraft, nutrients: foodDraft.nutrients.filter(x => x.id !== n.id) }) }, "\u00D7")),
-                    React.createElement("div", { className: "bioEdit" },
-                        React.createElement("label", null,
-                            "Quantit\u00E0 elementare (opz.)",
-                            React.createElement("input", { type: "number", step: "any", value: n.elementalAmount ?? '', onChange: e => editNutrient(i, { elementalAmount: e.target.value }) })),
-                        React.createElement("label", null,
-                            "Assorbimento minimo %",
-                            React.createElement("input", { type: "number", step: "any", min: "0", max: "100", value: n.bio?.min ?? '', onChange: e => editNutrient(i, { bio: { ...(n.bio || {}), mode: 'range', min: e.target.value } }) })),
-                        React.createElement("label", null,
-                            "Assorbimento massimo %",
-                            React.createElement("input", { type: "number", step: "any", min: "0", max: "100", value: n.bio?.max ?? '', onChange: e => editNutrient(i, { bio: { ...(n.bio || {}), mode: 'range', max: e.target.value } }) })),
-                        React.createElement("label", null,
-                            "Fonte stima",
-                            React.createElement("input", { placeholder: "studio / NIH / nota", value: n.bio?.source ?? '', onChange: e => editNutrient(i, { bio: { ...(n.bio || {}), source: e.target.value } }) })),
-                        React.createElement("label", null,
-                            "Fonte composizione",
-                            React.createElement("input", { placeholder: "USDA / CIQUAL / etichetta", value: n.source || '', onChange: e => editNutrient(i, { source: e.target.value }) }))))),
-                React.createElement("div", { className: "cardTitle" },
-                    React.createElement("h3", null, "Fonti"),
-                    React.createElement("button", { className: "ghost", onClick: () => setFoodDraft({ ...foodDraft, sources: [...(foodDraft.sources || []), { id: crypto.randomUUID(), name: '', reference: '', quality: 'primaria' }] }) }, "+ Fonte")),
-                (foodDraft.sources || []).map((s, i) => React.createElement("div", { className: "sourceEdit", key: s?.id || i },
-                    React.createElement("input", { value: s?.name || '', placeholder: "Fonte", onChange: e => { const x = [...foodDraft.sources]; x[i] = { ...s, name: e.target.value }; setFoodDraft({ ...foodDraft, sources: x }); } }),
-                    React.createElement("input", { value: s?.reference || '', placeholder: "Riferimento", onChange: e => { const x = [...foodDraft.sources]; x[i] = { ...s, reference: e.target.value }; setFoodDraft({ ...foodDraft, sources: x }); } }),
-                    React.createElement("select", { value: s?.quality || 'primaria', onChange: e => { const x = [...foodDraft.sources]; x[i] = { ...s, quality: e.target.value }; setFoodDraft({ ...foodDraft, sources: x }); } },
-                        React.createElement("option", { value: "primaria" }, "Primaria"),
-                        React.createElement("option", { value: "secondaria" }, "Secondaria"),
-                        React.createElement("option", { value: "stimata" }, "Stimata")),
-                    React.createElement("button", { className: "ghost danger", onClick: () => setFoodDraft({ ...foodDraft, sources: foodDraft.sources.filter((_, j) => j !== i) }) }, "\u00D7"))),
-                React.createElement("label", null,
-                    "Note",
-                    React.createElement("textarea", { rows: "3", value: foodDraft.notes || '', onChange: e => setFoodDraft({ ...foodDraft, notes: e.target.value }) })),
-                React.createElement("div", { className: "modalActions" },
-                    React.createElement("button", { className: "ghost", onClick: () => setFoodDraft(null) }, "Annulla"),
-                    React.createElement("button", { className: "cta", onClick: saveFood }, "Salva alimento")))));
+
+const h = React.createElement;
+
+const MICRO_CATALOG = [
+  { group:'Vitamine', id:'Vitamina A', name:'Vitamina A', unit:'µg', kind:'minimum' },
+  { group:'Vitamine', id:'Tiamina B1', name:'Tiamina B1', unit:'mg', kind:'minimum' },
+  { group:'Vitamine', id:'Riboflavina B2', name:'Riboflavina B2', unit:'mg', kind:'minimum' },
+  { group:'Vitamine', id:'Niacina B3', name:'Niacina B3', unit:'mg', kind:'minimum' },
+  { group:'Vitamine', id:'Acido pantotenico B5', name:'Acido pantotenico B5', unit:'mg', kind:'minimum' },
+  { group:'Vitamine', id:'Vitamina B6', name:'Vitamina B6', unit:'mg', kind:'minimum' },
+  { group:'Vitamine', id:'Biotina B7', name:'Biotina B7', unit:'µg', kind:'minimum' },
+  { group:'Vitamine', id:'Folati', name:'Folati', unit:'µg', kind:'minimum' },
+  { group:'Vitamine', id:'Vitamina B12', name:'Vitamina B12', unit:'µg', kind:'minimum' },
+  { group:'Vitamine', id:'Vitamina C', name:'Vitamina C', unit:'mg', kind:'minimum' },
+  { group:'Vitamine', id:'Vitamina D', name:'Vitamina D', unit:'µg', kind:'minimum' },
+  { group:'Vitamine', id:'Vitamina E', name:'Vitamina E', unit:'mg', kind:'minimum' },
+  { group:'Vitamine', id:'Vitamina K', name:'Vitamina K', unit:'µg', kind:'minimum' },
+  { group:'Vitamine', id:'Colina', name:'Colina', unit:'mg', kind:'minimum' },
+
+  { group:'Minerali e oligoelementi', id:'Calcio', name:'Calcio', unit:'mg', kind:'minimum' },
+  { group:'Minerali e oligoelementi', id:'Fosforo', name:'Fosforo', unit:'mg', kind:'minimum' },
+  { group:'Minerali e oligoelementi', id:'Magnesio', name:'Magnesio', unit:'mg', kind:'minimum' },
+  { group:'Minerali e oligoelementi', id:'Sodio', name:'Sodio', unit:'mg', kind:'upper' },
+  { group:'Minerali e oligoelementi', id:'Cloruro', name:'Cloruro', unit:'mg', kind:'minimum' },
+  { group:'Minerali e oligoelementi', id:'Potassio', name:'Potassio', unit:'mg', kind:'minimum' },
+  { group:'Minerali e oligoelementi', id:'Ferro', name:'Ferro', unit:'mg', kind:'minimum' },
+  { group:'Minerali e oligoelementi', id:'Zinco', name:'Zinco', unit:'mg', kind:'minimum' },
+  { group:'Minerali e oligoelementi', id:'Rame', name:'Rame', unit:'mg', kind:'minimum' },
+  { group:'Minerali e oligoelementi', id:'Manganese', name:'Manganese', unit:'mg', kind:'minimum' },
+  { group:'Minerali e oligoelementi', id:'Iodio', name:'Iodio', unit:'µg', kind:'minimum' },
+  { group:'Minerali e oligoelementi', id:'Selenio', name:'Selenio', unit:'µg', kind:'minimum' },
+  { group:'Minerali e oligoelementi', id:'Molibdeno', name:'Molibdeno', unit:'µg', kind:'minimum' },
+  { group:'Minerali e oligoelementi', id:'Cromo', name:'Cromo', unit:'µg', kind:'minimum' },
+  { group:'Minerali e oligoelementi', id:'Nickel', name:'Nickel', unit:'µg', kind:'target' },
+  { group:'Minerali e oligoelementi', id:'Fluoro', name:'Fluoro', unit:'mg', kind:'minimum' },
+  { group:'Minerali e oligoelementi', id:'Zolfo', name:'Zolfo', unit:'mg', kind:'minimum' },
+
+  { group:'Acidi grassi essenziali', id:'ALA', name:'ALA', unit:'mg', kind:'minimum' },
+  { group:'Acidi grassi essenziali', id:'EPA', name:'EPA', unit:'mg', kind:'minimum' },
+  { group:'Acidi grassi essenziali', id:'DHA', name:'DHA', unit:'mg', kind:'minimum' },
+  { group:'Acidi grassi essenziali', id:'Acido linoleico (LA)', name:'Acido linoleico (LA)', unit:'g', kind:'minimum' },
+  { group:'Acidi grassi essenziali', id:'Acido arachidonico (AA)', name:'Acido arachidonico (AA)', unit:'mg', kind:'target' },
+
+  ...EAA.map(name => ({ group:'Aminoacidi essenziali', id:name, name, unit:'g', kind:'minimum' }))
+];
+
+const MACRO_GOALS = [
+  { id:'kcal', name:'Energia', unit:'kcal', target:2400, period:'day', kind:'target', group:'Energia e macro' },
+  { id:'protein', name:'Proteine', unit:'g', target:160, period:'day', kind:'target', group:'Energia e macro' },
+  { id:'carbs', name:'Carboidrati', unit:'g', target:260, period:'day', kind:'target', group:'Energia e macro' },
+  { id:'fat', name:'Grassi', unit:'g', target:75, period:'day', kind:'target', group:'Energia e macro' },
+  { id:'sugar', name:'Zuccheri semplici', unit:'g', target:0, period:'day', kind:'upper', group:'Energia e macro' },
+  { id:'fiber', name:'Fibre', unit:'g', target:35, period:'day', kind:'minimum', group:'Energia e macro' }
+];
+
+function buildDefaultGoals(){
+  const legacy = Object.fromEntries(BASE_GOALS.map(g => [g.id, g]));
+  return [
+    ...MACRO_GOALS.map(x=>({...x,targetMode:'absolute',perKg:0})),
+    ...MICRO_CATALOG.map(x => ({...x, target: legacy[x.id]?.target || 0, period: legacy[x.id]?.period || 'day', kind: legacy[x.id]?.kind || x.kind, form:'*', targetMode:'absolute', perKg:0 }))
+  ];
 }
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(React.createElement(Home, null));
+function mergeGoalCatalog(saved){
+  const base=buildDefaultGoals();
+  if(!Array.isArray(saved) || !saved.length) return base;
+  const map=new Map(saved.map(g=>[String(g.id),g]));
+  const out=base.map(b=>({...b,...(map.get(String(b.id))||{}),group:(map.get(String(b.id))||{}).group||b.group,targetMode:(map.get(String(b.id))||{}).targetMode||'absolute',perKg:Number((map.get(String(b.id))||{}).perKg||0)}));
+  const ids=new Set(out.map(g=>String(g.id)));
+  for(const g of saved) if(!ids.has(String(g.id))) out.push({...g,group:g.group||'Personalizzati',targetMode:g.targetMode||'absolute',perKg:Number(g.perKg||0)});
+  return out;
+}
+
+const DEFAULT_PROFILE = { weight:80, macroPlan:{ calorieMode:'fixed', kcal:2400, autoMacro:'carbs', perKg:{ protein:2, carbs:3.25, fat:.8, sugar:.5, fiber:.4 } } };
+function normalizeProfile(p){
+  if(!p) return structuredClone(DEFAULT_PROFILE);
+  if(p.macroPlan) return {...structuredClone(DEFAULT_PROFILE),...p,macroPlan:{...structuredClone(DEFAULT_PROFILE).macroPlan,...p.macroPlan,perKg:{...DEFAULT_PROFILE.macroPlan.perKg,...(p.macroPlan.perKg||{})}}};
+  return {...structuredClone(DEFAULT_PROFILE),weight:Number(p.weight||80),macroPlan:{...structuredClone(DEFAULT_PROFILE).macroPlan,kcal:Number(p.kcal||2400),perKg:{...DEFAULT_PROFILE.macroPlan.perKg,protein:Number(p.proteinPerKg||2),fat:Number(p.fatPerKg||.8)}}};
+}
+function computeMacroPlan(profile){
+  const weight=Math.max(.1,Number(profile.weight)||0), plan=profile.macroPlan||DEFAULT_PROFILE.macroPlan;
+  const per={...DEFAULT_PROFILE.macroPlan.perKg,...(plan.perKg||{})};
+  const grams={protein:weight*Number(per.protein||0),carbs:weight*Number(per.carbs||0),fat:weight*Number(per.fat||0),sugar:weight*Number(per.sugar||0),fiber:weight*Number(per.fiber||0)};
+  const factors={protein:4,carbs:4,fat:9};
+  if(plan.calorieMode==='fixed' && ['protein','carbs','fat'].includes(plan.autoMacro)){
+    const auto=plan.autoMacro;
+    let used=0;
+    for(const k of ['protein','carbs','fat']) if(k!==auto) used+=grams[k]*factors[k];
+    grams[auto]=Math.max(0,(Number(plan.kcal||0)-used)/factors[auto]);
+    per[auto]=grams[auto]/weight;
+  }
+  const derivedKcal=grams.protein*4+grams.carbs*4+grams.fat*9;
+  return {weight,perKg:per,grams,kcal:plan.calorieMode==='derived'?derivedKcal:Number(plan.kcal||0),derivedKcal,delta:Number(plan.kcal||0)-derivedKcal};
+}
+
+function parseDateKey(k){ const [y,m,d]=String(k).split('-').map(Number); return new Date(y,m-1,d,12,0,0,0); }
+function shiftDateKey(k,days){ const d=parseDateKey(k); d.setDate(d.getDate()+days); return dateKey(d); }
+function startOfWeekFor(k){ const d=parseDateKey(k); d.setDate(d.getDate()-((d.getDay()+6)%7)); return d; }
+function weekBounds(k){ const a=startOfWeekFor(k), b=new Date(a); b.setDate(a.getDate()+6); return [dateKey(a),dateKey(b)]; }
+function dayLabel(k,today){ if(k===today) return 'Oggi'; return parseDateKey(k).toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'long',year:'numeric'}); }
+function shortDate(k){ return parseDateKey(k).toLocaleDateString('it-IT',{day:'2-digit',month:'short'}); }
+function effectiveTarget(g,weight){ return g.targetMode==='perKg' ? Number(g.perKg||0)*Number(weight||0) : Number(g.target||0); }
+function goalUnitLabel(g){ return g.targetMode==='perKg' ? `${g.unit}/kg` : g.unit; }
+function isMissing(v){ return v===null || v===undefined || v==='' || Number.isNaN(v); }
+
+const CREA_NAME_MAP = {
+  magnesium:'Magnesio', iron:'Ferro', calcium:'Calcio', potassium:'Potassio', zinc:'Zinco', copper:'Rame', manganese:'Manganese', selenium:'Selenio', iodine:'Iodio', phosphorus:'Fosforo', sodium:'Sodio', chlorine:'Cloruro', chromium:'Cromo', nickel:'Nickel', molybdenum:'Molibdeno', fluorine:'Fluoro', fluoride:'Fluoro', sulfur:'Zolfo',
+  vitamin_a_retinol_equivalent:'Vitamina A', thiamine:'Tiamina B1', riboflavin:'Riboflavina B2', niacin:'Niacina B3', pantothenic_acid:'Acido pantotenico B5', vitamin_b6:'Vitamina B6', biotin:'Biotina B7', folate:'Folati', folates:'Folati', vitamin_b12:'Vitamina B12', vitamin_c:'Vitamina C', vitamin_d:'Vitamina D', vitamin_e:'Vitamina E', vitamin_k:'Vitamina K',
+  sucrose:'Saccarosio', glucose:'Glucosio', fructose:'Fruttosio', lactose:'Lattosio', galactose:'Galattosio', maltose:'Maltosio',
+  leucine:'Leucina', isoleucine:'Isoleucina', valine:'Valina', lysine:'Lisina', methionine:'Metionina', threonine:'Treonina', tryptophan:'Triptofano', histidine:'Istidina', phenylalanine:'Fenilalanina'
+};
+const CREA_UNIT_MAP = {
+  fluorine:'mg', sodium:'mg', magnesium:'mg', phosphorus:'mg', chlorine:'mg', potassium:'mg', calcium:'mg', chromium:'mg', manganese:'mg', iron:'mg', nickel:'mg', copper:'mg', zinc:'mg', selenium:'µg', iodine:'µg',
+  sucrose:'g', glucose:'g', fructose:'g', lactose:'g', galactose:'g', maltose:'g',
+  vitamin_a_retinol_equivalent:'µg', thiamine:'mg', riboflavin:'mg', niacin:'mg', pantothenic_acid:'mg', vitamin_b6:'mg', biotin:'mg', folate:'µg', folates:'µg', vitamin_b12:'µg', vitamin_c:'mg', vitamin_d:'µg', vitamin_e:'mg', vitamin_k:'µg'
+};
+const CREA_AMINO_KEYS = new Set(['leucine','isoleucine','valine','lysine','methionine','threonine','tryptophan','histidine','phenylalanine']);
+function creaUnit(raw, display){
+  const n=norm(raw);
+  const byKey=Object.entries(CREA_UNIT_MAP).find(([k])=>n===norm(k));
+  if(byKey) return byKey[1];
+  const fromHeader=unitFromHeader(raw,'');
+  if(fromHeader) return fromHeader;
+  if(['Saccarosio','Glucosio','Fruttosio','Lattosio','Galattosio','Maltosio'].includes(display)) return 'g';
+  if(['Vitamina A','Folati','Vitamina B12','Vitamina D','Vitamina K','Selenio','Iodio'].includes(display)) return 'µg';
+  return 'mg';
+}
+function flattenCreaItems(record){
+  const items=[];
+  for(const [group,val] of Object.entries(record||{})) if(Array.isArray(val)) for(const x of val) if(x && typeof x==='object' && ('description' in x || 'Descrizione Nutriente' in x)) items.push({group,...x});
+  return items;
+}
+function normalizeCreaNested(source, records){
+  const meta=SOURCE_META[source]||{name:source,version:'importato'};
+  const out=[];
+  for(const r of records||[]){
+    const name=clean(r.name||r.Nome||r.food_name||r['Nome Alimento']); if(!name) continue;
+    const code=clean(r.food_code||r['Codice Alimento']||r.code||out.length+1);
+    const items=flattenCreaItems(r); const by={};
+    for(const item of items){ const desc=norm(item.description||item['Descrizione Nutriente']); by[desc]={...item,value:num(item.value??item['Valore per 100 g'])}; }
+    const get=(...keys)=>{ for(const k of keys){ const x=by[norm(k)]; if(x && x.value!==null) return x.value; } return null; };
+    const label=emptyLabel();
+    label.kcal=get('energy_kcal','Energia (kcal)')??'';
+    label.protein=get('proteins','Proteine (g)')??'';
+    label.fat=get('lipids','Lipidi (g)')??'';
+    label.carbs=get('available_carbohydrates','Carboidrati disponibili (g)')??'';
+    label.sugar=get('soluble_sugars','Zuccheri solubili (g)')??'';
+    label.fiber=get('total_fiber','Fibra totale (g)')??'';
+    const nutrients=[];
+    const add=(name,amount,unit,raw)=>{ if(amount===null || amount===undefined || !Number.isFinite(Number(amount))) return; nutrients.push({id:newId(),name,form:'naturalmente presente / non specificata',amount:Number(amount),unit,source:meta.name,evidence:'dataset CREA/importato',rawName:raw||name,bio:{mode:'none',min:'',max:'',source:''}}); };
+    for(const item of items){
+      const raw=clean(item.description||item['Descrizione Nutriente']); const n=norm(raw); const v=num(item.value??item['Valore per 100 g']); if(v===null) continue;
+      const groupNorm=norm(item.group||'');
+      if(groupNorm.includes('amino') || groupNorm.includes('fatty acid') || groupNorm.includes('acidi grassi')) continue;
+      let key=Object.keys(CREA_NAME_MAP).find(k=>n===norm(k)||n.startsWith(norm(k)+' '));
+      if(CREA_AMINO_KEYS.has(key)) continue;
+      if(!key){
+        const aliases=Object.entries(NUTRIENT_ALIASES).find(([,a])=>matchesHeader(raw,a));
+        if(aliases) key=aliases[0];
+      }
+      if(key){ const display=CREA_NAME_MAP[key]||key; const unit=creaUnit(key===display?raw:key,display); add(display,v,unit,raw); }
+    }
+    const fat=Number(label.fat)||0, protein=Number(label.protein)||0;
+    const pct=(...keys)=>get(...keys);
+    const sat=pct('saturated_fatty_acids','Acidi grassi Saturi (%)'); if(sat!==null && fat) label.saturatedFat=fat*sat/100;
+    const fatty=[['ALA',['C18:3_linolenic_acid','c18_3_linolenic_acid','C18:3 acido linolenico (%)']],['Acido linoleico (LA)',['C18:2_linoleic_acid','c18_2_linoleic_acid','C18:2 acido linoleico (%)']],['Acido arachidonico (AA)',['C20:4_arachidonic_acid','c20_4_arachidonic_acid','C20:4 acido arachidonico (%)']],['EPA',['C20:5_eicosapentaenoic_acid_EPA','c20_5_eicosapentaenoic_acid_epa','C20:5 acido eicosapentenoico EPA (%)']],['DHA',['C22:6_docosahexaenoic_acid_DHA','c22_6_docosahexaenoic_acid_dha','C22:6 acido docosaesenoico DHA (%)']]];
+    for(const [display,keys] of fatty){ const v=pct(...keys); if(v!==null && fat) add(display,fat*v/100,'g',keys[0]); }
+    for(const aa of EAA){ const english=Object.entries(CREA_NAME_MAP).find(([k,v])=>CREA_AMINO_KEYS.has(k)&&v===aa)?.[0]; const v=get(aa,aa.toLowerCase(),english); if(v!==null && protein) add(aa,protein*v/100,'g',aa); }
+    const sodium=nutrients.find(n=>n.name==='Sodio'); if(sodium && isMissing(label.salt)) label.salt=convert(sodium.amount,sodium.unit,'g')*2.5;
+    out.push({localId:`${source}:${code}`,source,sourceId:code,name,officialName:name,brand:'',servingGrams:100,label,nutrients,ingredients:'',aliases:[],sourceInfo:{id:newId(),name:meta.name,reference:`CREA ${code}`,quality:'primaria',version:meta.version||'2019'}});
+  }
+  return out;
+}
+function normalizeCreaFlat(source, rows){
+  const meta=SOURCE_META[source]||{name:source,version:'importato'};
+  const get=(r,...aliases)=>{ for(const [k,v] of Object.entries(r||{})) if(aliases.some(a=>norm(k)===norm(a))) return num(v); return null; };
+  const out=[];
+  for(const r of rows||[]){
+    const name=clean(r.name||r.Nome||r['Nome Alimento']); if(!name) continue;
+    const code=clean(r.food_code||r['Codice Alimento']||r.code||out.length+1);
+    const label=emptyLabel();
+    label.kcal=get(r,'energy_kcal','Energia (kcal)')??'';
+    label.protein=get(r,'proteins','Proteine (g)')??'';
+    label.fat=get(r,'lipids','Lipidi (g)')??'';
+    label.carbs=get(r,'available_carbohydrates','Carboidrati disponibili (g)')??'';
+    label.sugar=get(r,'soluble_sugars','Zuccheri solubili (g)')??'';
+    label.fiber=get(r,'total_fiber','Fibra totale (g)')??'';
+    const nutrients=[];
+    const add=(display,amount,unit,raw)=>{ if(amount===null||!Number.isFinite(Number(amount))) return; nutrients.push({id:newId(),name:display,form:'naturalmente presente / non specificata',amount:Number(amount),unit,source:meta.name,evidence:'dataset CREA/importato',rawName:raw||display,bio:{mode:'none',min:'',max:'',source:''}}); };
+    for(const [key,display] of Object.entries(CREA_NAME_MAP)){
+      if(CREA_AMINO_KEYS.has(key)) continue;
+      const v=get(r,key); if(v!==null) add(display,v,creaUnit(key,display),key);
+    }
+    const fat=Number(label.fat)||0, protein=Number(label.protein)||0;
+    const sat=get(r,'saturated_fatty_acids','Acidi grassi Saturi (%)'); if(sat!==null&&fat) label.saturatedFat=fat*sat/100;
+    const fatty=[
+      ['ALA',['C18:3_linolenic_acid','c18_3_linolenic_acid','C18:3 acido linolenico (%)']],
+      ['Acido linoleico (LA)',['C18:2_linoleic_acid','c18_2_linoleic_acid','C18:2 acido linoleico (%)']],
+      ['Acido arachidonico (AA)',['C20:4_arachidonic_acid','c20_4_arachidonic_acid','C20:4 acido arachidonico (%)']],
+      ['EPA',['C20:5_eicosapentaenoic_acid_EPA','c20_5_eicosapentaenoic_acid_epa','C20:5 acido eicosapentenoico EPA (%)']],
+      ['DHA',['C22:6_docosahexaenoic_acid_DHA','c22_6_docosahexaenoic_acid_dha','C22:6 acido docosaesenoico DHA (%)']]
+    ];
+    for(const [display,keys] of fatty){ const v=get(r,...keys); if(v!==null&&fat) add(display,fat*v/100,'g',keys[0]); }
+    for(const aa of EAA){ const english=Object.entries(CREA_NAME_MAP).find(([k,v])=>CREA_AMINO_KEYS.has(k)&&v===aa)?.[0]; const v=get(r,aa,aa.toLowerCase(),english); if(v!==null&&protein) add(aa,protein*v/100,'g',aa); }
+    const sodium=nutrients.find(n=>n.name==='Sodio'); if(sodium) label.salt=convert(sodium.amount,sodium.unit,'g')*2.5;
+    out.push({localId:`${source}:${code}`,source,sourceId:code,name,officialName:name,brand:'',servingGrams:100,label,nutrients,ingredients:'',aliases:[],sourceInfo:{id:newId(),name:meta.name,reference:`CREA ${code}`,quality:'primaria',version:meta.version||'2019'}});
+  }
+  return out;
+}
+function looksLikeCreaFlat(rows){
+  if(!rows?.length) return false;
+  const keys=Object.keys(rows[0]||{}).map(norm);
+  return keys.includes(norm('energy_kcal')) && keys.includes(norm('available_carbohydrates')) && (keys.includes(norm('food_code')) || keys.includes(norm('Codice Alimento')));
+}
+
+function parseJsonDataset(source,text){
+  let raw;
+  try{ raw=JSON.parse(text); }catch{ raw=String(text).split(/\r?\n/).filter(Boolean).map(line=>JSON.parse(line)); }
+  const arr=Array.isArray(raw)?raw:(Array.isArray(raw?.foods)?raw.foods:(Array.isArray(raw?.data)?raw.data:[]));
+  if(!arr.length) return [];
+  if(arr.some(x=>Array.isArray(x?.macro_nutrients)||Array.isArray(x?.['MACRO NUTRIENTI']))) return normalizeCreaNested(source,arr);
+  if(looksLikeCreaFlat(arr)) return normalizeCreaFlat(source,arr);
+  return normalizeRows(source,arr);
+}
+
+async function aiEnrich(food, missingNutrients){
+  const r=await fetch('/api/nutrition-enrich',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({food:{name:food.name,brand:food.brand||'',servingGrams:Number(food.servingGrams)||100,label:food.label||{},nutrients:food.nutrients||[]},missingNutrients})});
+  let d={}; try{ d=await r.json(); }catch{}
+  if(!r.ok) throw new Error(d.error||`AI ${r.status}`);
+  return d;
+}
+function mergeAiFood(food, ai){
+  const next=structuredClone(food); next.label={...next.label};
+  for(const k of Object.keys(MACROS)) if(isMissing(next.label[k]) && ai.label && !isMissing(ai.label[k])) next.label[k]=ai.label[k];
+  const existing=new Set((next.nutrients||[]).map(n=>norm(n.name)));
+  next.nutrients=[...(next.nutrients||[])];
+  for(const n of ai.nutrients||[]) if(n && n.name && !existing.has(norm(n.name)) && Number.isFinite(Number(n.amount))){ next.nutrients.push({id:newId(),name:n.name,form:'stima alimentare',amount:Number(n.amount),unit:n.unit||'mg',source:'AI · stima',evidence:`stima AI · confidenza ${n.confidence||'non specificata'}${n.basis?` · ${n.basis}`:''}`,bio:{mode:'none',min:'',max:'',source:''}}); existing.add(norm(n.name)); }
+  next.sources=[...(next.sources||[]),{id:newId(),name:'AI · stima integrativa',reference:ai.note||'Valori stimati; non equivalenti a dati analitici o di etichetta.',quality:'stimata'}];
+  return next;
+}
+
+function GoalRow({g,index,goals,setGoals,weight,current}){
+  const patch=(x)=>{ const a=[...goals]; a[index]={...a[index],...x}; setGoals(a); };
+  const amount=g.targetMode==='perKg'?g.perKg:g.target, custom=g.group==='Personalizzati';
+  return h('div',{className:`goalRow ${custom?'customGoal':''}`},
+    h('div',{className:'goalIdentity'},custom?h('input',{value:g.name,onChange:e=>patch({name:e.target.value}),placeholder:'Nome nutriente'}):h('b',null,g.name),h('small',null,`${fmt(current,2)} ${g.unit} registrati`)),
+    h('input',{type:'number',step:'any',value:amount,onChange:e=>patch(g.targetMode==='perKg'?{perKg:Number(e.target.value)}:{target:Number(e.target.value)})}),
+    h('select',{value:g.unit||'mg',onChange:e=>patch({unit:e.target.value})},h('option',{value:'g'},'g'),h('option',{value:'mg'},'mg'),h('option',{value:'µg'},'µg')),
+    h('select',{value:g.targetMode||'absolute',onChange:e=>patch({targetMode:e.target.value})},h('option',{value:'absolute'},'Assoluto'),h('option',{value:'perKg'},'Per kg BW')),
+    h('select',{value:g.kind||'minimum',onChange:e=>patch({kind:e.target.value})},h('option',{value:'minimum'},'Minimo'),h('option',{value:'target'},'Target'),h('option',{value:'upper'},'Massimo')),
+    h('select',{value:g.period||'day',onChange:e=>patch({period:e.target.value})},h('option',{value:'day'},'Giorno'),h('option',{value:'week'},'Settimana')),
+    h('span',{className:'goalComputed'},`→ ${fmt(effectiveTarget(g,weight),2)} ${g.unit}${g.targetMode==='perKg'?` (${fmt(Number(g.perKg||0),3)} ${g.unit}/kg)`:''}`),
+    custom?h('button',{className:'ghost danger',onClick:()=>setGoals(goals.filter(x=>x.id!==g.id))},'×'):null
+  );
+}
+
+function Home(){
+  const [foods,setFoods]=useState([]), [logs,setLogs]=useState([]), [goals,setGoals]=useState(buildDefaultGoals()), [profile,setProfile]=useState(structuredClone(DEFAULT_PROFILE));
+  const [tab,setTab]=useState('oggi'), [foodDraft,setFoodDraft]=useState(null), [grams,setGrams]=useState(100), [loaded,setLoaded]=useState(false);
+  const [query,setQuery]=useState(''), [results,setResults]=useState([]), [searchError,setSearchError]=useState(''), [searching,setSearching]=useState(false);
+  const [quickQuery,setQuickQuery]=useState(''), [datasetMsg,setDatasetMsg]=useState(''), [datasets,setDatasets]=useState({}), [datasetMeta,setDatasetMeta]=useState([]), [newDatasetName,setNewDatasetName]=useState('CREA Italia'), [newDatasetFile,setNewDatasetFile]=useState(null);
+  const [aiBusy,setAiBusy]=useState(''), [aiMsg,setAiMsg]=useState('');
+  const [deviceToday,setDeviceToday]=useState(dateKey()), [selectedDate,setSelectedDate]=useState(dateKey());
+
+  useEffect(()=>{ try{
+    setFoods(JSON.parse(localStorage.getItem('nutritrace_foods')||'[]'));
+    setLogs(JSON.parse(localStorage.getItem('nutritrace_logs')||'[]'));
+    setGoals(mergeGoalCatalog(JSON.parse(localStorage.getItem('nutritrace_goals_v4')||localStorage.getItem('nutritrace_goals_v3')||'null')));
+    setProfile(normalizeProfile(JSON.parse(localStorage.getItem('nutritrace_profile')||'null')));
+    let meta=JSON.parse(localStorage.getItem('nutritrace_dataset_meta_v4')||'[]');
+    (async()=>{
+      if(localStorage.getItem('nutritrace_dataset_migration_v4')!=='1'){
+        for(const legacy of [{id:'CIQUAL',name:'ANSES-CIQUAL'},{id:'FRIDA',name:'FRIDA / DTU Food Institute'},{id:'COFID',name:'UK CoFID'}]){
+          const rows=await dbGet(legacy.id);
+          if(rows.length && !meta.some(m=>m.id===legacy.id)) meta.push({id:legacy.id,name:legacy.name,fileName:'migrato dalla v1.1',count:rows.length,version:SOURCE_META[legacy.id]?.version||'legacy'});
+        }
+        await Promise.allSettled(['USDA_FOUNDATION','USDA_SR','USDA_BRANDED'].map(dbDel));
+        localStorage.removeItem('nutritrace_usda_key'); localStorage.removeItem('nutritrace_commercial_online');
+        localStorage.setItem('nutritrace_dataset_migration_v4','1');
+      }
+      setDatasetMeta(meta);
+      const obj={}; for(const m of meta){ SOURCE_META[m.id]={name:m.name,version:m.version||'importato',mode:'local',official:false,scientific:true}; obj[m.id]=await dbGet(m.id); } setDatasets(obj);
+    })();
+  } finally { setLoaded(true); }
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  },[]);
+  useEffect(()=>{ if(loaded) localStorage.setItem('nutritrace_foods',JSON.stringify(foods)); },[foods,loaded]);
+  useEffect(()=>{ if(loaded) localStorage.setItem('nutritrace_logs',JSON.stringify(logs)); },[logs,loaded]);
+  useEffect(()=>{ if(loaded) localStorage.setItem('nutritrace_goals_v4',JSON.stringify(goals)); },[goals,loaded]);
+  useEffect(()=>{ if(loaded) localStorage.setItem('nutritrace_profile',JSON.stringify(profile)); },[profile,loaded]);
+  useEffect(()=>{ if(loaded) localStorage.setItem('nutritrace_dataset_meta_v4',JSON.stringify(datasetMeta)); },[datasetMeta,loaded]);
+  useEffect(()=>{ const sync=()=>{ const now=dateKey(); if(now!==deviceToday){ setSelectedDate(d=>d===deviceToday?now:d); setDeviceToday(now); } }; const t=setInterval(sync,30000); document.addEventListener('visibilitychange',sync); return()=>{clearInterval(t);document.removeEventListener('visibilitychange',sync)}; },[deviceToday]);
+
+  const dayLogs=logs.filter(l=>l.date===selectedDate), [weekStart,weekEnd]=weekBounds(selectedDate), weekLogs=logs.filter(l=>l.date>=weekStart&&l.date<=weekEnd);
+  const totals=useMemo(()=>aggregate(dayLogs,foods),[dayLogs,foods]), weekTotals=useMemo(()=>aggregate(weekLogs,foods),[weekLogs,foods]);
+  const recentIds=[...logs].reverse().map(l=>l.foodId).filter((id,i,a)=>a.indexOf(id)===i).slice(0,6);
+  const quickSuggestions=useMemo(()=>{ if(!quickQuery.trim()) return recentIds.map(id=>foods.find(f=>f.id===id)).filter(Boolean).map(f=>({...f,resultType:'personal'})); const personal=searchPersonalFoods(quickQuery,foods,5), local=searchLocalDataset(quickQuery,datasets,8).map(f=>({...f,resultType:'local'})); return [...personal,...local].slice(0,10); },[quickQuery,foods,datasets,logs]);
+  const macroPreview=useMemo(()=>computeMacroPlan(profile),[profile]);
+
+  function valueForGoal(g,ag){ if(Object.keys(MACROS).includes(g.id)) return ag[g.id]||0; const v=nutrientTotal(ag,g.name,g.unit,g.form||'*'); if(v===0 && g.name==='Sodio' && ag.salt>0) return convert(ag.salt/2.5,'g',g.unit); return v; }
+  function saveFood(){ if(!foodDraft?.name?.trim()) return; const f={...foodDraft,additives:parseAdditives(foodDraft.ingredients)}; setFoods(p=>[...p.filter(x=>x.id!==f.id),f]); setFoodDraft(null); }
+  function removeFood(id){ const f=foods.find(x=>x.id===id); if(!f) return; const n=logs.filter(l=>l.foodId===id).length; if(!confirm(`Rimuovere “${f.name}” dall'archivio?${n?` Verranno eliminate anche ${n} registrazioni del diario.`:''}`)) return; setFoods(p=>p.filter(x=>x.id!==id)); setLogs(p=>p.filter(l=>l.foodId!==id)); }
+  function addFoodLog(foodId,g=grams){ if(!foodId||Number(g)<=0) return; setLogs(p=>[...p,{id:newId(),date:selectedDate,foodId,grams:Number(g)}]); }
+  function quickAdd(r){ if(Number(grams)<=0) return; if(r.resultType==='personal'){ addFoodLog(r.id); setQuickQuery(''); return; } const f=materializeImported(r,quickQuery||r.name); setFoods(p=>[...p,f]); setLogs(p=>[...p,{id:newId(),date:selectedDate,foodId:f.id,grams:Number(grams)}]); setQuickQuery(''); }
+  function materializeImported(f,alias=''){ const source=f.sourceInfo||f.source; const useAlias=alias.trim(); return {...emptyFood(),source:f.source||'',sourceId:f.sourceId||'',name:useAlias?alias.trim():f.name,officialName:f.officialName||f.name,aliases:[...new Set([...(f.aliases||[]),...(useAlias?[alias.trim()]:[])])],brand:f.brand||'',servingGrams:f.servingGrams||100,label:f.label||emptyFood().label,ingredients:f.ingredients||'',nutrients:f.nutrients||[],sources:[source],mergeMeta:{importedFrom:f.source||source?.name}}; }
+  function openImported(f,alias=query){ const same=foods.find(z=>(z.sourceId&&z.sourceId===f.sourceId)||(norm(z.name)===norm(f.name)&&norm(z.brand||'')===norm(f.brand||''))); if(same) setFoodDraft({...structuredClone(same),mergeMeta:{mode:'review',candidate:f}}); else setFoodDraft(materializeImported(f,alias)); setTab('alimenti'); }
+  async function searchFoods(){ if(!query.trim()) return; setSearching(true); setSearchError(''); try{ const local=searchLocalDataset(query,datasets,40).map(f=>({...f,resultType:'local'})); setResults(local); if(!local.length) setSearchError('Nessun risultato nei database locali. Puoi creare una stima AI oppure aggiungere un alimento manualmente.'); } finally{ setSearching(false); } }
+  async function createWithAI(name){ setAiBusy('search'); setAiMsg(''); try{ let f={...emptyFood(),name:name.trim(),aliases:[name.trim()]}; const ai=await aiEnrich(f,MICRO_CATALOG.map(x=>x.name)); f=mergeAiFood(f,ai); setFoodDraft(f); setTab('alimenti'); }catch(e){ setAiMsg(e.message); }finally{ setAiBusy(''); } }
+  async function enrichDraft(){ if(!foodDraft?.name) return; setAiBusy('draft'); setAiMsg(''); try{ const have=new Set((foodDraft.nutrients||[]).map(n=>norm(n.name))); const missing=MICRO_CATALOG.map(x=>x.name).filter(n=>!have.has(norm(n))); setFoodDraft(mergeAiFood(foodDraft,await aiEnrich(foodDraft,missing))); }catch(e){ setAiMsg(e.message); }finally{ setAiBusy(''); } }
+  function applyMacroPlan(){ const p=macroPreview; setProfile(x=>({...x,macroPlan:{...x.macroPlan,perKg:{...x.macroPlan.perKg,...p.perKg}}})); setGoals(gs=>gs.map(g=>g.id==='kcal'?{...g,target:p.kcal,targetMode:'absolute'}:['protein','carbs','fat','sugar','fiber'].includes(g.id)?{...g,perKg:p.perKg[g.id],target:p.grams[g.id],targetMode:'perKg'}:g)); }
+  function exportData(){ const b=new Blob([JSON.stringify({version:4,foods,logs,goals,profile},null,2)],{type:'application/json'}),u=URL.createObjectURL(b),a=document.createElement('a'); a.href=u; a.download=`nutritrace-${dateKey()}.json`; a.click(); URL.revokeObjectURL(u); }
+  function importBackup(e){ const f=e.target.files?.[0]; if(!f)return; const rd=new FileReader(); rd.onload=()=>{ try{ const d=JSON.parse(rd.result); if(d.foods)setFoods(d.foods); if(d.logs)setLogs(d.logs); if(d.goals)setGoals(mergeGoalCatalog(d.goals)); if(d.profile)setProfile(normalizeProfile(d.profile)); }catch{ alert('Backup non valido'); } }; rd.readAsText(f); }
+  async function importCustomDataset(){ if(!newDatasetName.trim()||!newDatasetFile){ setDatasetMsg('Inserisci un nome e seleziona un file.'); return; } const id=`CUSTOM_${Date.now()}`; SOURCE_META[id]={name:newDatasetName.trim(),version:'importato',mode:'local',official:false,scientific:true}; setDatasetMsg(`Importazione ${newDatasetName.trim()}…`); try{ const buf=await newDatasetFile.arrayBuffer(), lower=newDatasetFile.name.toLowerCase(); let normalized=[]; if(lower.endsWith('.json')||lower.endsWith('.jsonl')) normalized=parseJsonDataset(id,new TextDecoder().decode(buf)); else { const rows=parseSheetRows(buf,'array'); normalized=looksLikeCreaFlat(rows)?normalizeCreaFlat(id,rows):normalizeRows(id,rows); } if(!normalized.length) throw new Error('Formato non riconosciuto o nessun alimento trovato. Sono supportati CSV/XLSX/ODS e JSON/JSONL, incluso il formato CREA esportato.'); await dbSet(id,normalized); setDatasets(d=>({...d,[id]:normalized})); setDatasetMeta(m=>[...m,{id,name:newDatasetName.trim(),fileName:newDatasetFile.name,count:normalized.length,version:'importato'}]); setDatasetMsg(`${newDatasetName.trim()}: ${normalized.length} alimenti disponibili offline.`); setNewDatasetFile(null); }catch(e){ setDatasetMsg(`Errore: ${e.message}`); } }
+  async function removeDataset(id){ const m=datasetMeta.find(x=>x.id===id); if(!confirm(`Rimuovere il database “${m?.name||id}” dal dispositivo?`)) return; await dbDel(id); setDatasets(d=>{const x={...d};delete x[id];return x}); setDatasetMeta(x=>x.filter(m=>m.id!==id)); setDatasetMsg('Database rimosso.'); }
+  const addNutrient=()=>setFoodDraft({...foodDraft,nutrients:[...(foodDraft.nutrients||[]),emptyNutrient()]});
+  function editNutrient(i,patch){ const a=[...foodDraft.nutrients]; a[i]={...a[i],...patch}; setFoodDraft({...foodDraft,nutrients:a}); }
+
+  const dateNavigator=h('div',{className:'dateNavigator'},
+    h('button',{className:'ghost navDay',onClick:()=>setSelectedDate(shiftDateKey(selectedDate,-1))},'‹'),
+    h('div',{className:'dateCenter'},h('strong',null,dayLabel(selectedDate,deviceToday)),h('small',null,`${shortDate(weekStart)} – ${shortDate(weekEnd)}`)),
+    h('input',{type:'date',value:selectedDate,onChange:e=>e.target.value&&setSelectedDate(e.target.value),'aria-label':'Seleziona giorno'}),
+    h('button',{className:'ghost navDay',onClick:()=>setSelectedDate(shiftDateKey(selectedDate,1))},'›'),
+    selectedDate!==deviceToday?h('button',{className:'ghost todayBtn',onClick:()=>setSelectedDate(deviceToday)},'Oggi'):null
+  );
+
+  return h('main',null,
+    h('header',{className:'hero'},h('div',null,h('div',{className:'eyebrow'},'DIARIO NUTRIZIONALE PERSONALE · V1.2 LOCAL-FIRST'),h('h1',null,'NutriTrace'),h('p',null,'Diario per data, composizione completa, database locali e integrazione AI tracciata.')),h('div',{className:'privacy'},'● Local-first · AI solo su richiesta')),
+    h('nav',{className:'tabs'},['oggi','ricerca','alimenti','obiettivi','dati'].map(x=>h('button',{key:x,className:tab===x?'active':'',onClick:()=>setTab(x)},x[0].toUpperCase()+x.slice(1)))),
+
+    tab==='oggi'&&h('section',null,
+      dateNavigator,
+      h('div',{className:'grid5'},[['kcal','Energia','kcal'],['protein','Proteine','g'],['carbs','Carboidrati','g'],['fat','Grassi','g'],['fiber','Fibre','g']].map(([id,n,u],i)=>{const g=goals.find(x=>x.id===id);return h('article',{className:`metric ${i===0?'primary':''}`,key:id},h('span',null,n),h(Progress,{value:totals[id],goal:effectiveTarget(g||{},profile.weight),unit:u,kind:g?.kind}));})),
+      h('article',{className:'card quickDiary'},h('div',{className:'cardTitle'},h('div',null,h('h2',null,selectedDate===deviceToday?'Cosa hai mangiato oggi?':`Aggiungi al ${shortDate(selectedDate)}`),h('p',null,'Ogni voce viene salvata nel giorno selezionato; lo storico non viene mai sommato ad altri giorni.'))),
+        h('div',{className:'quickInputs'},h('label',null,'Alimento',h('input',{value:quickQuery,placeholder:'es. pasta integrale, mela, salmone…',onChange:e=>setQuickQuery(e.target.value)})),h('label',null,'Grammi',h('input',{type:'number',min:'1',step:'any',value:grams,onChange:e=>setGrams(e.target.value)}))),
+        quickSuggestions.length?h('div',{className:'quickSuggestions'},quickSuggestions.map(r=>h('button',{className:'quickChoice',key:r.id||r.localId,onClick:()=>quickAdd(r)},h('span',null,h('b',null,r.name),h('small',null,r.resultType==='personal'?'Archivio personale':SOURCE_META[r.source]?.name||'Database locale')),h('strong',null,'+ Aggiungi')))):quickQuery.trim()?h('div',{className:'emptyAction'},h('span',{className:'muted'},'Nessuna corrispondenza locale.'),h('div',{className:'inlineActions'},h('button',{className:'ghost',onClick:()=>{setFoodDraft({...emptyFood(),name:quickQuery.trim(),aliases:[quickQuery.trim()]});setTab('alimenti');}},'Inserisci manualmente'),h('button',{className:'cta',disabled:aiBusy==='search',onClick:()=>createWithAI(quickQuery)},aiBusy==='search'?'Stima…':'Crea con AI'))):null
+      ),
+      h('div',{className:'twoCol'},
+        h('article',{className:'card'},h('h2',null,'Diario del giorno'),!dayLogs.length?h('p',{className:'empty'},'Nessun alimento nel giorno selezionato.'):h('div',{className:'list'},dayLogs.map(l=>{const f=foods.find(x=>x.id===l.foodId);return h('div',{className:'row',key:l.id},h('div',null,h('b',null,f?.name||'Alimento rimosso'),h('small',null,`${fmt(l.grams)} g`)),h('span',null,f?`${fmt((Number(f.label?.kcal)||0)*Number(l.grams)/(Number(f.servingGrams)||100))} kcal`:''),h('button',{className:'ghost danger',onClick:()=>setLogs(p=>p.filter(x=>x.id!==l.id))},'Rimuovi'));}))),
+        h('article',{className:'card'},h('h2',null,'Settimana selezionata'),h('p',{className:'muted'},`${shortDate(weekStart)} – ${shortDate(weekEnd)}`),h('div',{className:'miniGrid'},h('div',null,h('small',null,'Energia'),h('strong',null,`${fmt(weekTotals.kcal)} kcal`)),h('div',null,h('small',null,'Proteine'),h('strong',null,`${fmt(weekTotals.protein)} g`)),h('div',null,h('small',null,'Carboidrati'),h('strong',null,`${fmt(weekTotals.carbs)} g`)),h('div',null,h('small',null,'Grassi'),h('strong',null,`${fmt(weekTotals.fat)} g`))))
+      ),
+      h('article',{className:'card'},h('h2',null,'Micronutrienti del giorno'),!Object.keys(totals.nutrients).length?h('p',{className:'empty'},'Nessun micronutriente registrato.'):h('div',{className:'nutriTable'},Object.entries(totals.nutrients).sort().map(([k,v])=>{const [n,form,unit]=k.split('|');return h('div',{className:'bioRow',key:k},h('div',null,h('b',null,n),h('small',null,form)),h('strong',null,`${fmt(v.amount,3)} ${unit}`),h('span',null,[...v.sources].join(', ')));})))
+    ),
+
+    tab==='ricerca'&&h('section',null,
+      h('div',{className:'sectionHead'},h('div',null,h('h2',null,'Ricerca alimenti'),h('p',null,'Ricerca esclusivamente nei database salvati sul dispositivo.'))),
+      h('article',{className:'card'},h('div',{className:'searchBox'},h('input',{value:query,placeholder:'Cerca un alimento…',onChange:e=>setQuery(e.target.value),onKeyDown:e=>e.key==='Enter'&&searchFoods()}),h('button',{className:'cta',onClick:searchFoods,disabled:searching},searching?'Ricerca…':'Cerca')),datasetMeta.length?h('div',{className:'sourceBadges'},datasetMeta.map(m=>h('span',{className:'online',key:m.id},`${m.name} · ${datasets[m.id]?.length||0}`))):h('p',{className:'muted'},'Nessun database installato: aggiungine uno nella sezione Dati.'),searchError&&h('p',{className:'errorText'},searchError),
+        results.map(r=>h('div',{className:'searchResult',key:r.localId||r.sourceId},h('div',null,h('b',null,r.name),h('small',null,`${SOURCE_META[r.source]?.name||'Database locale'}${r.brand?` · ${r.brand}`:''}`)),h('button',{className:'ghost',onClick:()=>openImported(r,query)},'Apri / importa'))),
+        query.trim()&&!results.length&&h('div',{className:'aiFallback'},h('div',null,h('b',null,'Alimento non trovato?'),h('p',{className:'muted'},'L’AI può creare una stima per 100 g. I valori vengono marcati come stimati e non sostituiscono dati analitici.')),h('button',{className:'cta',disabled:aiBusy==='search',onClick:()=>createWithAI(query)},aiBusy==='search'?'Stima in corso…':'Crea stima AI')),
+        aiMsg&&h('p',{className:'errorText'},aiMsg)
+      )
+    ),
+
+    tab==='alimenti'&&h('section',null,
+      h('div',{className:'sectionHead'},h('div',null,h('h2',null,'Archivio alimenti'),h('p',null,'Alimenti importati, manuali o stimati con AI.'))),
+      !foods.length?h('article',{className:'card empty'},'Non hai ancora alimenti.'):h('div',{className:'foodCards'},foods.map(f=>h('article',{className:'card',key:f.id},h('div',{className:'cardTitle'},h('div',null,h('h3',null,f.name),h('p',null,f.brand||f.officialName||'')),h('div',{className:'inlineActions'},h('button',{className:'ghost',onClick:()=>setFoodDraft(structuredClone(f))},'Modifica'),h('button',{className:'ghost danger',onClick:()=>removeFood(f.id)},'Rimuovi'))),h('div',{className:'macroLine'},h('span',null,`${fmt(f.label?.kcal)} kcal`),h('span',null,`P ${fmt(f.label?.protein)} g`),h('span',null,`C ${fmt(f.label?.carbs)} g`),h('span',null,`G ${fmt(f.label?.fat)} g`)),h('small',{className:'sourceText'},`Fonti: ${f.sources?.length?f.sources.map(s=>s?.name||s).join(', '):'manuale'}`))))
+    ),
+
+    tab==='obiettivi'&&h('section',null,
+      h('div',{className:'twoCol goalsTop'},
+        h('article',{className:'card'},h('h2',null,'Peso ed energia / macro'),h('p',{className:'muted'},'Proteine, carboidrati, grassi, zuccheri semplici e fibre sono impostabili in g/kg di peso corporeo.'),
+          h('div',{className:'macroPlanGrid'},
+            h('label',null,'Peso (kg)',h('input',{type:'number',step:'any',value:profile.weight,onChange:e=>setProfile({...profile,weight:e.target.value})})),
+            h('label',null,'Gestione calorie',h('select',{value:profile.macroPlan.calorieMode,onChange:e=>setProfile({...profile,macroPlan:{...profile.macroPlan,calorieMode:e.target.value}})},h('option',{value:'fixed'},'Calorie fisse · un macro automatico'),h('option',{value:'derived'},'Calorie automatiche dai macro'))),
+            profile.macroPlan.calorieMode==='fixed'&&h('label',null,'Calorie target',h('input',{type:'number',step:'1',value:profile.macroPlan.kcal,onChange:e=>setProfile({...profile,macroPlan:{...profile.macroPlan,kcal:e.target.value}})})),
+            profile.macroPlan.calorieMode==='fixed'&&h('label',null,'Macro automatico',h('select',{value:profile.macroPlan.autoMacro,onChange:e=>setProfile({...profile,macroPlan:{...profile.macroPlan,autoMacro:e.target.value}})},h('option',{value:'carbs'},'Carboidrati'),h('option',{value:'protein'},'Proteine'),h('option',{value:'fat'},'Grassi'))),
+            ...[['protein','Proteine'],['carbs','Carboidrati'],['fat','Grassi'],['sugar','Zuccheri semplici'],['fiber','Fibre']].map(([k,l])=>h('label',{key:k},`${l} (g/kg)`,h('input',{type:'number',step:'any',disabled:profile.macroPlan.calorieMode==='fixed'&&profile.macroPlan.autoMacro===k,value:macroPreview.perKg[k],onChange:e=>setProfile({...profile,macroPlan:{...profile.macroPlan,perKg:{...profile.macroPlan.perKg,[k]:e.target.value}}})})))
+          ),
+          h('div',{className:'planPreview'},h('b',null,`${fmt(macroPreview.kcal,0)} kcal`),h('span',null,`P ${fmt(macroPreview.grams.protein)} g · C ${fmt(macroPreview.grams.carbs)} g · G ${fmt(macroPreview.grams.fat)} g · zuccheri ${fmt(macroPreview.grams.sugar)} g · fibre ${fmt(macroPreview.grams.fiber)} g`)),
+          profile.macroPlan.calorieMode==='fixed'&&macroPreview.derivedKcal>macroPreview.kcal+1&&h('p',{className:'errorText tiny'},`Combinazione impossibile: i macro fissati richiedono già ${fmt(macroPreview.derivedKcal,0)} kcal, oltre il target di ${fmt(macroPreview.kcal,0)} kcal.`),
+          macroPreview.grams.sugar>macroPreview.grams.carbs&&h('p',{className:'errorText tiny'},'Zuccheri semplici non possono superare i carboidrati totali: correggi il target g/kg.'),
+          h('p',{className:'muted tiny'},'Nota tecnica: zuccheri semplici sono una sottoquota dei carboidrati e le fibre non vengono usate come “residuo calorico”. Il solver automatico agisce solo su proteine/carboidrati/grassi; se scegli tutti e tre, imposta “Calorie automatiche”.'),
+          h('button',{className:'cta',onClick:applyMacroPlan},'Applica ai target')
+        ),
+        h('article',{className:'card'},h('h2',null,'Stato settimana selezionata'),h('p',{className:'muted'},`${shortDate(weekStart)} – ${shortDate(weekEnd)}`),goals.filter(g=>g.period==='week'&&effectiveTarget(g,profile.weight)>0).slice(0,10).map(g=>h('div',{key:g.id,className:'goalStatus'},h('span',null,g.name),h(Progress,{value:valueForGoal(g,weekTotals),goal:effectiveTarget(g,profile.weight),unit:g.unit,kind:g.kind}))),!goals.some(g=>g.period==='week'&&effectiveTarget(g,profile.weight)>0)&&h('p',{className:'empty'},'Nessun target settimanale attivo.'))
+      ),
+      h('article',{className:'card'},h('div',{className:'cardTitle'},h('div',null,h('h2',null,'Micronutrienti e componenti'),h('p',null,'Target assoluto oppure per kg di peso; raggruppati per rendere l’elenco gestibile.')),h('button',{className:'ghost',onClick:()=>setGoals([...goals,{id:newId(),name:'Nuovo nutriente',form:'*',unit:'mg',target:0,perKg:0,targetMode:'absolute',period:'day',kind:'minimum',group:'Personalizzati'}])},'+ Nutriente')),
+        [...new Set(goals.filter(g=>g.group!=='Energia e macro').map(g=>g.group||'Personalizzati'))].map(group=>h('details',{className:'goalGroup',key:group,open:group==='Vitamine'||group==='Minerali e oligoelementi'},h('summary',null,h('b',null,group),h('span',null,`${goals.filter(g=>(g.group||'Personalizzati')===group).length} voci`)),h('div',{className:'goalRows'},goals.map((g,i)=>(g.group||'Personalizzati')===group?h(GoalRow,{key:g.id,g,index:i,goals,setGoals,weight:profile.weight,current:valueForGoal(g,g.period==='week'?weekTotals:totals)}):null))))
+      )
+    ),
+
+    tab==='dati'&&h('section',null,
+      h('div',{className:'twoCol'},
+        h('article',{className:'card'},h('h2',null,'Database locali'),!datasetMeta.length?h('p',{className:'empty'},'Nessun database installato.'):h('div',{className:'localDbList'},datasetMeta.map(m=>h('div',{className:'localDbRow',key:m.id},h('div',null,h('b',null,m.name),h('small',null,`${datasets[m.id]?.length||m.count||0} alimenti · ${m.fileName||'file locale'}`)),h('button',{className:'ghost danger',onClick:()=>removeDataset(m.id)},'Rimuovi'))))),
+        h('article',{className:'card'},h('h2',null,'Backup'),h('button',{className:'cta',onClick:exportData},'Esporta JSON'),h('label',{className:'importLabel'},'Importa backup',h('input',{type:'file',accept:'application/json',onChange:importBackup})),h('p',{className:'muted tiny'},'I database voluminosi restano in IndexedDB e non vengono duplicati nel backup del diario.'))
+      ),
+      h('article',{className:'card addDbCard'},h('div',{className:'cardTitle'},h('div',null,h('h2',null,'Aggiungi database'),h('p',null,'Dagli il nome che vuoi: non sei più vincolato a USDA/CIQUAL/FRIDA/CoFID.'))),h('div',{className:'addDbGrid'},h('label',null,'Nome database',h('input',{value:newDatasetName,onChange:e=>setNewDatasetName(e.target.value),placeholder:'es. CREA Italia'})),h('label',null,'File',h('input',{type:'file',accept:'.csv,.xlsx,.xls,.ods,.json,.jsonl',onChange:e=>setNewDatasetFile(e.target.files?.[0]||null)})),h('button',{className:'cta',onClick:importCustomDataset,disabled:!newDatasetFile},'+ Aggiungi')),datasetMsg&&h('p',{className:'statusMsg'},datasetMsg),h('p',{className:'muted tiny'},'Il parser riconosce tabelle larghe CSV/XLSX e anche il formato JSON/JSONL CREA comunemente esportato, comprese conversioni corrette di aminoacidi (% delle proteine) e acidi grassi (% dei lipidi).')),
+      h('article',{className:'card notice'},h('h3',null,'Database italiano consigliato'),h('p',null,'Per l’Italia la fonte di riferimento è CREA – Tabelle di composizione degli alimenti. NutriTrace è predisposto per importarne un export locale e conservarlo offline sul dispositivo. La build è predisposta per il dataset CREA 2019 in CSV/JSON. Per non incorporare nella distribuzione una copia non ufficialmente fornita come download dal CREA, il file dati resta importabile localmente; l’attribuzione originale viene mantenuta nel database.')),
+      h('article',{className:'card notice'},h('h3',null,'AI integrativa'),h('p',null,'L’AI viene usata solo su richiesta per alimenti assenti o valori mancanti. Le stime sono marcate come tali e non sovrascrivono database o etichette. Per abilitarla su Vercel configura OPENROUTER_API_KEY; opzionalmente OPENROUTER_MODEL. Il default è openrouter/free.'))
+    ),
+
+    foodDraft&&h('div',{className:'modalBackdrop'},h('div',{className:'modal'},
+      h('div',{className:'modalHead'},h('div',null,h('span',{className:'eyebrow'},'SCHEDA ALIMENTO'),h('h2',null,foodDraft.name||'Nuovo alimento')),h('button',{className:'close',onClick:()=>setFoodDraft(null)},'×')),
+      foodDraft.mergeMeta?.mode==='review'&&h('div',{className:'mergeWarning'},h('b',null,'Possibile corrispondenza con un alimento già presente. '),'Controlla i dati prima di salvare.'),
+      h('div',{className:'formGrid'},h('label',null,'Nome rapido',h('input',{value:foodDraft.name,onChange:e=>setFoodDraft({...foodDraft,name:e.target.value})})),h('label',null,'Marca (opzionale)',h('input',{value:foodDraft.brand||'',onChange:e=>setFoodDraft({...foodDraft,brand:e.target.value})})),h('label',null,'Valori riferiti a (g)',h('input',{type:'number',value:foodDraft.servingGrams,onChange:e=>setFoodDraft({...foodDraft,servingGrams:e.target.value})}))),
+      foodDraft.officialName&&foodDraft.officialName!==foodDraft.name&&h('p',{className:'officialName'},h('b',null,'Voce ufficiale: '),foodDraft.officialName),
+      h('label',null,'Alias di ricerca (separati da virgola)',h('input',{value:(foodDraft.aliases||[]).join(', '),onChange:e=>setFoodDraft({...foodDraft,aliases:e.target.value.split(',').map(x=>x.trim()).filter(Boolean)})})),
+      h('div',{className:'cardTitle aiTitle'},h('h3',null,'Etichetta / macro'),h('button',{className:'ghost',disabled:aiBusy==='draft',onClick:enrichDraft},aiBusy==='draft'?'Completamento…':'Completa campi mancanti con AI')),
+      aiMsg&&h('p',{className:'errorText'},aiMsg),
+      h('div',{className:'formGrid'},Object.entries(MACROS).map(([k,l])=>h('label',{key:k},l,h('input',{type:'number',step:'any',value:foodDraft.label?.[k]??'',onChange:e=>setFoodDraft({...foodDraft,label:{...foodDraft.label,[k]:e.target.value}})})))),
+      h('h3',null,'Ingredienti completi'),h('label',null,'Lista come in etichetta',h('textarea',{rows:4,value:foodDraft.ingredients||'',onChange:e=>setFoodDraft({...foodDraft,ingredients:e.target.value})})),
+      parseAdditives(foodDraft.ingredients).length>0&&h('div',{className:'chips'},parseAdditives(foodDraft.ingredients).map(a=>h('span',{key:a},a))),
+      h('div',{className:'cardTitle'},h('div',null,h('h3',null,'Nutrienti specifici / forme'),h('p',null,'Quantità riferite alla base indicata sopra.')),h('button',{className:'ghost',onClick:addNutrient},'+ Aggiungi')),
+      (foodDraft.nutrients||[]).map((n,i)=>h('div',{className:'nutrientAdvanced',key:n.id},h('div',{className:'nutrientMain'},h('input',{placeholder:'Magnesio / EPA / Leucina',value:n.name,onChange:e=>editNutrient(i,{name:e.target.value})}),h('input',{placeholder:'forma / nota',value:n.form||'',onChange:e=>editNutrient(i,{form:e.target.value})}),h('input',{type:'number',step:'any',placeholder:'quantità',value:n.amount,onChange:e=>editNutrient(i,{amount:e.target.value})}),h('select',{value:n.unit,onChange:e=>editNutrient(i,{unit:e.target.value})},h('option',null,'mg'),h('option',null,'µg'),h('option',null,'g')),h('button',{className:'ghost danger',onClick:()=>setFoodDraft({...foodDraft,nutrients:foodDraft.nutrients.filter(x=>x.id!==n.id)})},'×')),h('div',{className:'bioEdit'},h('label',null,'Quantità elementare (opz.)',h('input',{type:'number',step:'any',value:n.elementalAmount??'',onChange:e=>editNutrient(i,{elementalAmount:e.target.value})})),h('label',null,'Assorbimento minimo %',h('input',{type:'number',min:0,max:100,step:'any',value:n.bio?.min??'',onChange:e=>editNutrient(i,{bio:{...(n.bio||{}),mode:'range',min:e.target.value}})})),h('label',null,'Assorbimento massimo %',h('input',{type:'number',min:0,max:100,step:'any',value:n.bio?.max??'',onChange:e=>editNutrient(i,{bio:{...(n.bio||{}),mode:'range',max:e.target.value}})})),h('label',null,'Fonte stima',h('input',{value:n.bio?.source??'',onChange:e=>editNutrient(i,{bio:{...(n.bio||{}),source:e.target.value}})})),h('label',null,'Fonte composizione',h('input',{value:n.source||'',onChange:e=>editNutrient(i,{source:e.target.value})}))))),
+      h('div',{className:'cardTitle'},h('h3',null,'Fonti'),h('button',{className:'ghost',onClick:()=>setFoodDraft({...foodDraft,sources:[...(foodDraft.sources||[]),{id:newId(),name:'',reference:'',quality:'primaria'}]})},'+ Fonte')),
+      (foodDraft.sources||[]).map((s,i)=>h('div',{className:'sourceEdit',key:s?.id||i},h('input',{value:s?.name||'',placeholder:'Fonte',onChange:e=>{const x=[...foodDraft.sources];x[i]={...s,name:e.target.value};setFoodDraft({...foodDraft,sources:x})}}),h('input',{value:s?.reference||'',placeholder:'Riferimento',onChange:e=>{const x=[...foodDraft.sources];x[i]={...s,reference:e.target.value};setFoodDraft({...foodDraft,sources:x})}}),h('select',{value:s?.quality||'primaria',onChange:e=>{const x=[...foodDraft.sources];x[i]={...s,quality:e.target.value};setFoodDraft({...foodDraft,sources:x})}},h('option',{value:'primaria'},'Primaria'),h('option',{value:'secondaria'},'Secondaria'),h('option',{value:'stimata'},'Stimata')),h('button',{className:'ghost danger',onClick:()=>setFoodDraft({...foodDraft,sources:foodDraft.sources.filter((_,j)=>j!==i)})},'×'))),
+      h('label',null,'Note',h('textarea',{rows:3,value:foodDraft.notes||'',onChange:e=>setFoodDraft({...foodDraft,notes:e.target.value})})),
+      h('div',{className:'modalActions'},h('button',{className:'ghost',onClick:()=>setFoodDraft(null)},'Annulla'),h('button',{className:'cta',onClick:saveFood},'Salva alimento'))
+    ))
+  );
+}
+const root=ReactDOM.createRoot(document.getElementById('root'));
+root.render(h(Home));

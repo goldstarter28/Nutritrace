@@ -1,0 +1,11 @@
+Fonte dati consigliata per NutriTrace
+
+CREA Centro di ricerca Alimenti e Nutrizione
+Tabelle di composizione degli alimenti — aggiornamento 2019
+
+https://www.crea.gov.it/alimenti-e-nutrizione
+https://www.alimentinutrizione.it
+
+Il dataset è relativo agli alimenti maggiormente consumati in Italia. Quando dati CREA vengono importati/redistribuiti, mantenere una chiara indicazione della fonte originale e verificare le condizioni d'uso applicabili alla propria distribuzione.
+
+Il pacchetto NutriTrace non contiene una copia integrale ottenuta tramite scraping del portale CREA; contiene il parser/importer locale compatibile.
