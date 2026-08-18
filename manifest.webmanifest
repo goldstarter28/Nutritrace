@@ -1,7 +1,7 @@
 {
   "name": "NutriTrace",
   "short_name": "NutriTrace",
-  "description": "Diario nutrizionale local-first con calendario, database locali e AI opzionale",
+  "description": "Diario nutrizionale local-first con Runtime Food DB auditato a 14 fonti, calendario, ricette assistite e AI controllata",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#f7f8f5",
